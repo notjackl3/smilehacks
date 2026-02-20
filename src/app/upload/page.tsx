@@ -1,0 +1,48 @@
+export default function UploadPage() {
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-50">
+            <div className="w-full max-w-xl px-6">
+                {/* <!-- Name + Description --> */}
+                <div className="text-center mb-8">
+                    <h1 className="text-3xl font-semibold tracking-tight text-slate-900">
+                        OralVision
+                    </h1>
+                    <p className="text-sm text-slate-500 mt-2">
+                        Convert 2D X-ray scans into interactive 3D models
+                    </p>
+                </div>
+
+                {/* <!-- Upload Card --> */}
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 space-y-6">
+                    {/* <!-- Upload Area --> */}
+                    <label
+                        htmlFor="fileInput"
+                        className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-8 cursor-pointer hover:border-slate-400 transition"
+                    >
+                        <span className="text-sm text-slate-600">
+                            Click to upload X-ray image
+                        </span>
+                        <span className="text-xs text-slate-400 mt-1">
+                            PNG, JPG supported
+                        </span>
+                    </label>
+
+                    <input
+                        id="fileInput"
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                    />
+
+                    <button
+                        id="convertBtn"
+                        className="w-full bg-slate-900 text-white text-sm py-2.5 rounded-lg hover:bg-slate-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled
+                    >
+                        Generate 3D Model
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
