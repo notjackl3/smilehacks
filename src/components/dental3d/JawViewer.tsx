@@ -194,6 +194,7 @@ interface JawModelProps {
   cavities: Cavity[];
   voiceSelectedNames: Set<string>;
   focusMode: boolean;
+  chewingMode: boolean;
   controlsRef: React.RefObject<{ target: THREE.Vector3; update: () => void } | null>;
 }
 
@@ -208,6 +209,7 @@ function JawModel({
   cavities,
   voiceSelectedNames,
   focusMode,
+  chewingMode,
   controlsRef,
 }: JawModelProps) {
   const [model, setModel] = useState<THREE.Group | null>(null);
@@ -221,6 +223,11 @@ function JawModel({
   const defaultCameraPos = useRef(new THREE.Vector3(0, 0, 6));
   const defaultTarget = useRef(new THREE.Vector3(0, 0, 0));
   const wasFocused = useRef(false);
+  const animationFrameId = useRef<number | null>(null);
+  const lowerJawMeshes = useRef<THREE.Mesh[]>([]);
+  const upperJawMeshes = useRef<THREE.Mesh[]>([]);
+  const allChewingMeshes = useRef<THREE.Mesh[]>([]);
+  const originalPositionsRef = useRef<Map<number, number>>(new Map());
 
   const getMeshInfo = useCallback((mesh: THREE.Mesh): PartInfo => {
     const name = meshNames.current.get(mesh.id) || mesh.name || 'unknown';
@@ -279,7 +286,7 @@ function JawModel({
           if (cavityMode && info.type === 'tooth') {
             setMeshHighlight(mesh.id, 0xff4444, 0.3);
           } else {
-            setMeshHighlight(mesh.id, 0xffd700, 0.3);
+            setMeshHighlight(mesh.id, 0x1e90ff, 0.3); // Blue hover highlight
           }
         }
 
@@ -503,6 +510,214 @@ function JawModel({
     });
   }, [voiceSelectedNames, selectedMeshId, setMeshHighlight]);
 
+  // Handle chewing animation
+  useEffect(() => {
+    if (!model) return;
+
+    if (chewingMode) {
+      // Count cavities per tooth
+      const cavityCountMap = new Map<string, number>();
+      cavities.forEach(cavity => {
+        const count = cavityCountMap.get(cavity.toothName) || 0;
+        cavityCountMap.set(cavity.toothName, count + 1);
+      });
+
+      // Helper function to get chewing intensity based on tooth type
+      // Biomechanically accurate: molars do most work, incisors do very little
+      // BONUS: teeth with more cavities glow redder (more damage = more visible wear)
+      const getChewingIntensity = (toothName: string): number => {
+        const toothInfo = getToothInfo(toothName);
+        const displayName = toothInfo.displayName.toLowerCase();
+
+        let baseIntensity = 0.3; // Default
+
+        // First Molars - Primary chewing teeth (strongest bite force)
+        if (displayName.includes('first molar')) baseIntensity = 0.75;
+
+        // Second Molars - Also primary chewing teeth
+        else if (displayName.includes('second molar')) baseIntensity = 0.65;
+
+        // First Premolars - Secondary chewing teeth
+        else if (displayName.includes('first premolar')) baseIntensity = 0.45;
+
+        // Second Premolars - Secondary chewing teeth
+        else if (displayName.includes('second premolar')) baseIntensity = 0.35;
+
+        // Canines - Guide the bite, minimal chewing force
+        else if (displayName.includes('canine')) baseIntensity = 0.15;
+
+        // Lateral Incisors - Minimal involvement in chewing
+        else if (displayName.includes('lateral incisor')) baseIntensity = 0.08;
+
+        // Central Incisors - Minimal involvement in chewing
+        else if (displayName.includes('central incisor')) baseIntensity = 0.05;
+
+        // Lower Gum - Base support structure
+        else if (toothName === 'jaw.029') baseIntensity = 0.25;
+
+        // Cavity damage multiplier: each cavity adds 0.2 to intensity (damaged teeth show more stress)
+        const cavityCount = cavityCountMap.get(toothName) || 0;
+        const cavityBonus = cavityCount * 0.2;
+
+        return Math.min(baseIntensity + cavityBonus, 10); // Cap at 2.5 max intensity for heavily damaged teeth
+      };
+
+      // Identify jaw meshes if not already done
+      if (allChewingMeshes.current.length === 0) {
+        allMeshes.current.forEach(mesh => {
+          const name = meshNames.current.get(mesh.id) || '';
+          const toothInfo = getToothInfo(name);
+
+          // Lower jaw: lower gum and all lower teeth (these will move AND glow)
+          if (name === 'jaw.029' || (toothInfo.quadrant && toothInfo.quadrant.toLowerCase().includes('lower'))) {
+            lowerJawMeshes.current.push(mesh);
+            allChewingMeshes.current.push(mesh);
+          }
+          // Upper jaw: upper gum and all upper teeth (these will only glow, not move)
+          else if (name === 'jaw.014' || (toothInfo.quadrant && toothInfo.quadrant.toLowerCase().includes('upper'))) {
+            upperJawMeshes.current.push(mesh);
+            allChewingMeshes.current.push(mesh);
+          }
+        });
+      }
+
+      // Capture all chewing meshes (both upper and lower)
+      const meshesToGlow = allChewingMeshes.current;
+      const meshesToMove = lowerJawMeshes.current;
+
+      // Store original positions (only for moving meshes), base intensities, and colors
+      const baseIntensities = new Map<number, number>();
+      const meshColors = new Map<number, number>();
+
+      // Helper function to get red color based on cavity count (lighter to darker red)
+      const getRedColorByCavities = (cavityCount: number): number => {
+        // Interpolate from light red to dark red based on cavity count
+        // Light red (no cavities): 0xff6666
+        // Medium red (2-3 cavities): 0xcc0000
+        // Dark red (5+ cavities): 0x660000
+        const t = Math.min(cavityCount / 5, 1); // Normalize to 0-1 range (5 cavities = max darkness)
+
+        // Interpolate RGB values
+        const r = Math.floor(255 - (255 - 102) * t); // 255 -> 102
+        const g = Math.floor(102 * (1 - t)); // 102 -> 0
+        const b = Math.floor(102 * (1 - t)); // 102 -> 0
+
+        return (r << 16) | (g << 8) | b;
+      };
+
+      // Store positions for meshes that will move (lower jaw only)
+      originalPositionsRef.current.clear();
+      meshesToMove.forEach(mesh => {
+        originalPositionsRef.current.set(mesh.id, mesh.position.y);
+      });
+
+      // Apply glow to ALL chewing meshes (both upper and lower)
+      meshesToGlow.forEach(mesh => {
+        const name = meshNames.current.get(mesh.id) || '';
+        const baseIntensity = getChewingIntensity(name);
+        baseIntensities.set(mesh.id, baseIntensity);
+
+        // Get cavity count for this tooth and determine color
+        const cavityCount = cavityCountMap.get(name) || 0;
+        const redColor = getRedColorByCavities(cavityCount);
+        meshColors.set(mesh.id, redColor);
+
+        // Apply red glow to show impact - color darkens with more cavities
+        const material = mesh.material as THREE.MeshStandardMaterial;
+        material.emissive.setHex(redColor);
+        material.emissiveIntensity = baseIntensity;
+      });
+
+      const startTime = Date.now();
+      const chewSpeed = 2; // Speed of chewing (cycles per second)
+      const chewAmplitude = 0.15; // How far the jaw moves
+
+      const animate = () => {
+        try {
+          const elapsed = (Date.now() - startTime) / 1000; // Time in seconds
+          const offset = Math.sin(elapsed * Math.PI * chewSpeed) * chewAmplitude;
+
+          // Pulsing factor (0 to 1) - represents contact pressure during chewing cycle
+          const pulseFactor = Math.abs(Math.sin(elapsed * Math.PI * chewSpeed));
+
+          // Move lower jaw meshes
+          meshesToMove.forEach(mesh => {
+            if (mesh && mesh.position) {
+              const originalY = originalPositionsRef.current.get(mesh.id) || 0;
+              mesh.position.y = originalY + offset;
+            }
+          });
+
+          // Update glow for ALL chewing meshes (both upper and lower)
+          meshesToGlow.forEach(mesh => {
+            if (mesh && mesh.material) {
+              // Each tooth pulses at its own base intensity level
+              const baseIntensity = baseIntensities.get(mesh.id) || 0.3;
+              const minIntensity = baseIntensity * 0.5; // Dimmer when jaw is open
+              const maxIntensity = baseIntensity * 1.2; // Brighter at contact
+              const currentIntensity = minIntensity + (maxIntensity - minIntensity) * pulseFactor;
+
+              // Update glow intensity to pulse with movement
+              const material = mesh.material as THREE.MeshStandardMaterial;
+              // Use the pre-calculated color based on cavity count (darker red = more cavities)
+              const redColor = meshColors.get(mesh.id) || 0xff3333;
+              material.emissive.setHex(redColor);
+              material.emissiveIntensity = currentIntensity;
+            }
+          });
+        } catch (error) {
+          console.error('Chewing animation error:', error);
+        }
+
+        // Continue animation loop indefinitely - this runs forever while chewingMode is true
+        animationFrameId.current = requestAnimationFrame(animate);
+      };
+
+      // Start the animation
+      animationFrameId.current = requestAnimationFrame(animate);
+
+      // Cleanup
+      return () => {
+        if (animationFrameId.current !== null) {
+          cancelAnimationFrame(animationFrameId.current);
+          animationFrameId.current = null;
+        }
+        // Reset positions for lower jaw
+        meshesToMove.forEach(mesh => {
+          const originalY = originalPositionsRef.current.get(mesh.id);
+          if (originalY !== undefined) {
+            mesh.position.y = originalY;
+          }
+        });
+        // Remove glow from all chewing meshes
+        meshesToGlow.forEach(mesh => {
+          const material = mesh.material as THREE.MeshStandardMaterial;
+          material.emissive.setHex(0x000000);
+          material.emissiveIntensity = 0;
+        });
+      };
+    } else {
+      // When stopping, reset positions and remove glow
+      if (animationFrameId.current !== null) {
+        cancelAnimationFrame(animationFrameId.current);
+        animationFrameId.current = null;
+      }
+      // Reset positions for lower jaw meshes
+      lowerJawMeshes.current.forEach(mesh => {
+        const originalY = originalPositionsRef.current.get(mesh.id);
+        if (originalY !== undefined) {
+          mesh.position.y = originalY;
+        }
+      });
+      // Reset glow for all chewing meshes (both upper and lower)
+      allChewingMeshes.current.forEach(mesh => {
+        const material = mesh.material as THREE.MeshStandardMaterial;
+        material.emissive.setHex(0x000000);
+        material.emissiveIntensity = 0;
+      });
+    }
+  }, [chewingMode, model, cavities]);
+
   useEffect(() => {
     const loader = new OBJLoader();
     loader.load(
@@ -602,12 +817,12 @@ function Sidebar({
   const toothCavities = cavities.filter(c => c.toothName === selectedPart.name);
 
   return (
-    <div className="absolute right-0 top-0 h-full w-80 bg-slate-800/95 backdrop-blur-sm border-l border-slate-600 p-4 z-20 flex flex-col overflow-y-auto">
+    <div className="absolute right-0 top-0 h-full w-80 bg-white/95 backdrop-blur-sm border-l border-gray-200 p-4 z-20 flex flex-col overflow-y-auto shadow-lg text-right">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-white">Part Details</h2>
+        <h2 className="text-lg font-semibold text-gray-800">Part Details</h2>
         <button
           onClick={onClose}
-          className="text-slate-400 hover:text-white transition-colors"
+          className="text-gray-400 hover:text-gray-600 transition-colors"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -615,42 +830,42 @@ function Sidebar({
         </button>
       </div>
 
-      <div className="bg-slate-700/50 rounded-lg p-4 mb-4">
-        <div className="flex items-center gap-2 mb-2">
-          <span className="text-2xl">{selectedPart.type === 'tooth' ? '🦷' : '🔴'}</span>
-          <span className="text-white font-medium">
+      <div className="bg-gray-50 rounded-lg p-4 mb-4 border border-gray-200">
+        <div className="flex items-center gap-2 mb-2 justify-end">
+          <span className="text-gray-800 font-medium">
             {selectedPart.displayName || selectedPart.name}
           </span>
+          <span className="text-2xl">{selectedPart.type === 'tooth' ? '🦷' : ''}</span>
         </div>
         {selectedPart.quadrant && (
-          <p className="text-slate-400 text-sm mb-1">{selectedPart.quadrant}</p>
+          <p className="text-gray-500 text-sm mb-1">{selectedPart.quadrant}</p>
         )}
         {selectedPart.toothNumber && (
-          <p className="text-slate-500 text-xs font-mono">Tooth #{selectedPart.toothNumber} ({selectedPart.name})</p>
+          <p className="text-gray-400 text-xs font-mono">Tooth #{selectedPart.toothNumber} ({selectedPart.name})</p>
         )}
         {!selectedPart.toothNumber && selectedPart.type === 'gum' && (
-          <p className="text-slate-500 text-xs font-mono">{selectedPart.name}</p>
+          <p className="text-gray-400 text-xs font-mono">{selectedPart.name}</p>
         )}
       </div>
 
       {selectedPart.type === 'tooth' && (
-        <div className="bg-slate-700/30 rounded-lg p-4 mb-4">
-          <h3 className="text-white font-medium mb-2 flex items-center gap-2">
-            <span>🕳️</span> Cavities ({toothCavities.length})
+        <div className="bg-gray-50 rounded-lg p-4 mb-4 border border-gray-200">
+          <h3 className="text-gray-800 font-medium mb-2 flex items-center gap-2">
+            Cavities ({toothCavities.length})
           </h3>
           {toothCavities.length === 0 ? (
-            <p className="text-slate-400 text-sm">No cavities marked on this tooth</p>
+            <p className="text-gray-500 text-sm">No cavities marked on this tooth</p>
           ) : (
             <div className="space-y-2">
               {toothCavities.map((cavity, idx) => (
                 <div
                   key={cavity.id}
-                  className="flex items-center justify-between bg-slate-600/50 rounded px-3 py-2"
+                  className="flex items-center justify-between bg-white rounded px-3 py-2 border border-gray-200"
                 >
-                  <span className="text-slate-300 text-sm">Cavity #{idx + 1}</span>
+                  <span className="text-gray-700 text-sm">Cavity #{idx + 1}</span>
                   <button
                     onClick={() => onRemoveCavity(cavity.id)}
-                    className="text-red-400 hover:text-red-300 text-sm"
+                    className="text-red-500 hover:text-red-600 text-sm"
                   >
                     Remove
                   </button>
@@ -661,14 +876,14 @@ function Sidebar({
         </div>
       )}
 
-      <div className="bg-slate-700/30 rounded-lg p-4 mb-4 flex-1">
-        <p className="text-slate-400 text-sm">Additional information will appear here...</p>
+      <div className="bg-gray-50 rounded-lg p-4 mb-4 flex-1 border border-gray-200">
+        <p className="text-gray-500 text-sm">Additional information will appear here...</p>
       </div>
 
       <div className="space-y-2">
         <button
           onClick={() => onDelete(selectedPart.name)}
-          className="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
+          className="w-full bg-red-500 hover:bg-red-600 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -695,6 +910,7 @@ export default function JawViewer() {
   const [voiceSelectedNames, setVoiceSelectedNames] = useState<Set<string>>(new Set());
   const [lastVoiceCommand, setLastVoiceCommand] = useState<string>('');
   const [focusMode, setFocusMode] = useState(false);
+  const [chewingMode, setChewingMode] = useState(false);
   const controlsRef = useRef<{ target: THREE.Vector3; update: () => void } | null>(null);
 
   const handleVoiceCommand = useCallback((command: VoiceCommandResult) => {
@@ -760,69 +976,87 @@ export default function JawViewer() {
   }, []);
 
   return (
-    <div className="w-full h-screen bg-gradient-to-b from-slate-900 to-slate-800 relative">
-      <div className="absolute top-4 left-4 z-10 bg-slate-800/80 backdrop-blur-sm rounded-lg px-4 py-2">
-        <h1 className="text-xl font-bold text-white">DentalVision</h1>
-        <p className="text-sm text-slate-300">3D Dental Model Viewer</p>
+    <div
+      className="w-full h-screen bg-gray-100 relative"
+      style={{
+        backgroundImage: `
+          linear-gradient(to right, #e5e7eb 1px, transparent 1px),
+          linear-gradient(to bottom, #e5e7eb 1px, transparent 1px)
+        `,
+        backgroundSize: '40px 40px',
+      }}
+    >
+      <div className="absolute top-4 left-4 z-10 bg-white/90 backdrop-blur-sm rounded-lg px-4 py-2 shadow-sm border border-gray-200">
+        <h1 className="text-xl font-bold text-gray-800">DentalVision</h1>
+        <p className="text-sm text-gray-500">3D Dental Model Viewer</p>
       </div>
 
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-2">
-        <div className="flex gap-2">
+      {/* Top center panel for tools */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10">
+        <div className="bg-white/95 backdrop-blur-sm rounded-lg border border-gray-200 shadow-sm px-2 py-2 flex items-center gap-2">
           <button
             onClick={() => setCavityMode(!cavityMode)}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+            className={`px-3 py-1.5 rounded-md font-medium transition-colors flex items-center gap-2 text-sm ${
               cavityMode
-                ? 'bg-red-600 text-white'
-                : 'bg-slate-700/80 text-slate-300 hover:bg-slate-600'
+                ? 'bg-red-500 text-white'
+                : 'text-gray-700 hover:bg-gray-100'
             }`}
           >
-            <span>🕳️</span>
             {cavityMode ? 'Adding Cavities...' : 'Add Cavity'}
           </button>
           {cavityMode && (
             <button
               onClick={() => setCavityMode(false)}
-              className="px-4 py-2 rounded-lg font-medium bg-slate-700/80 text-slate-300 hover:bg-slate-600 transition-colors"
+              className="px-3 py-1.5 rounded-md font-medium text-gray-700 hover:bg-gray-100 transition-colors text-sm"
             >
               Done
             </button>
           )}
-          <button
-            onClick={() => setFocusMode(!focusMode)}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
-              focusMode
-                ? 'bg-blue-600 text-white'
-                : 'bg-slate-700/80 text-slate-300 hover:bg-slate-600'
-            }`}
-          >
-            <span>🔍</span>
-            {focusMode ? 'Focus Mode ON' : 'Focus Mode'}
-          </button>
         </div>
+      </div>
+
+      {/* Bottom right toolbar */}
+      <div className="absolute right-4 bottom-4 z-10 bg-white/95 backdrop-blur-sm rounded-lg border border-gray-200 shadow-sm px-2 py-2 flex items-center gap-2">
+        <button
+          onClick={() => setChewingMode(!chewingMode)}
+          className={`p-3 rounded-lg font-medium transition-colors flex items-center justify-center ${
+            chewingMode
+              ? 'bg-green-500 text-white'
+              : 'bg-white text-gray-700 hover:bg-blue-100 border border-gray-200'
+          }`}
+          title={chewingMode ? 'Chewing...' : 'Chewing Animation'}
+        >
+          <span className="text-lg">{chewingMode ? '⏸️' : '🦷'} Chew</span>
+        </button>
+        <button
+          onClick={() => setFocusMode(!focusMode)}
+          className={`p-3 rounded-lg font-medium transition-colors flex items-center justify-center ${
+            focusMode
+              ? 'bg-blue-500 text-white'
+              : 'bg-white text-gray-700 hover:bg-blue-100 border border-gray-200'
+          }`}
+          title={focusMode ? 'Focus Mode ON' : 'Focus Mode'}
+        >
+          <span className="text-lg">Focus Mode</span>
+        </button>
         <VoiceCommand onCommand={handleVoiceCommand} />
       </div>
 
-      {cavityMode && (
-        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-10 bg-red-900/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-red-600">
-          <p className="text-sm text-red-100">Click on any tooth to place a cavity marker</p>
-        </div>
-      )}
-
       {focusMode && !selectedPart && (
-        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-10 bg-blue-900/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-blue-600">
-          <p className="text-sm text-blue-100">Click on a tooth to focus and zoom in</p>
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-10 bg-blue-50 backdrop-blur-sm rounded-lg px-4 py-2 border border-blue-200 shadow-sm">
+          <p className="text-sm text-blue-700">Click on a tooth to focus and zoom in</p>
         </div>
       )}
 
       {focusMode && selectedPart && (
-        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-10 bg-blue-900/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-blue-600 flex items-center gap-3">
-          <p className="text-sm text-blue-100">Focused on {selectedPart.displayName}</p>
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-10 bg-blue-50 backdrop-blur-sm rounded-lg px-4 py-2 border border-blue-200 shadow-sm flex items-center gap-3">
+          <p className="text-sm text-blue-700">Focused on {selectedPart.displayName}</p>
           <button
             onClick={() => {
               setFocusMode(false);
               setSelectedPart(null);
             }}
-            className="px-3 py-1 bg-blue-700 hover:bg-blue-600 text-white text-sm rounded transition-colors"
+            className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded transition-colors"
           >
             Exit Focus
           </button>
@@ -830,69 +1064,59 @@ export default function JawViewer() {
       )}
 
       {hoveredPart && !selectedPart && !cavityMode && (
-        <div className="absolute top-20 left-4 z-10 bg-slate-800/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-slate-600">
-          <p className="text-sm text-slate-300">
-            <span className="text-white font-medium">
-              {hoveredPart.type === 'tooth' ? '🦷' : '🔴'} {hoveredPart.displayName || hoveredPart.name}
+        <div className="absolute top-4 right-4 z-10 bg-white/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-gray-200 shadow-sm text-right">
+          <p className="text-medium text-gray-800">
+            <span className="text-gray-800 font-medium">
+              {hoveredPart.displayName || hoveredPart.name}
             </span>
           </p>
           {hoveredPart.quadrant && (
-            <p className="text-xs text-slate-400">{hoveredPart.quadrant}</p>
+            <p className="text-sm text-gray-400">{hoveredPart.quadrant}</p>
           )}
-          <p className="text-xs text-slate-400 mt-1">Click to select</p>
         </div>
       )}
 
       <div className="absolute bottom-4 left-4 z-10 flex gap-2">
         {deletedParts.size > 0 && (
-          <div className="bg-slate-800/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-slate-600">
-            <p className="text-sm text-slate-300">
+          <div className="bg-white/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-gray-200 shadow-sm">
+            <p className="text-sm text-gray-700">
               {deletedParts.size} part{deletedParts.size > 1 ? 's' : ''} deleted
             </p>
             <button
               onClick={() => setDeletedParts(new Set())}
-              className="text-xs text-blue-400 hover:text-blue-300 mt-1"
+              className="text-xs text-blue-600 hover:text-blue-700 mt-1"
             >
               Restore all
             </button>
           </div>
         )}
         {cavities.length > 0 && (
-          <div className="bg-slate-800/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-slate-600">
-            <p className="text-sm text-slate-300">
-              🕳️ {cavities.length} cavit{cavities.length > 1 ? 'ies' : 'y'}
+          <div className="bg-white/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-gray-200 shadow-sm">
+            <p className="text-sm text-gray-700">
+              {cavities.length} cavit{cavities.length > 1 ? 'ies' : 'y'}
             </p>
             <button
               onClick={() => setCavities([])}
-              className="text-xs text-blue-400 hover:text-blue-300 mt-1"
+              className="text-xs text-blue-600 hover:text-blue-700 mt-1"
             >
               Clear all
             </button>
           </div>
         )}
         {voiceSelectedNames.size > 0 && (
-          <div className="bg-cyan-900/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-cyan-600">
-            <p className="text-sm text-cyan-100">
+          <div className="bg-cyan-50 backdrop-blur-sm rounded-lg px-4 py-2 border border-cyan-200 shadow-sm">
+            <p className="text-sm text-cyan-700">
               🎤 {voiceSelectedNames.size} teeth selected
             </p>
             <button
               onClick={() => setVoiceSelectedNames(new Set())}
-              className="text-xs text-cyan-300 hover:text-cyan-200 mt-1"
+              className="text-xs text-cyan-600 hover:text-cyan-700 mt-1"
             >
               Clear selection
             </button>
           </div>
         )}
       </div>
-
-      {lastVoiceCommand && (
-        <div className="absolute bottom-4 right-4 z-10 max-w-xs">
-          <div className="bg-slate-800/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-slate-600">
-            <p className="text-xs text-slate-400">Last voice command:</p>
-            <p className="text-sm text-slate-200">&quot;{lastVoiceCommand}&quot;</p>
-          </div>
-        </div>
-      )}
 
       {selectedPart && !cavityMode && (
         <Sidebar
@@ -906,9 +1130,9 @@ export default function JawViewer() {
 
       <Canvas
         camera={{ position: [0, 0, 6], fov: 45 }}
-        gl={{ antialias: true }}
+        gl={{ antialias: true, alpha: true }}
+        style={{ background: 'transparent' }}
       >
-        <color attach="background" args={['#1e293b']} />
 
         <ambientLight intensity={0.6} />
         <directionalLight position={[5, 5, 5]} intensity={1} />
@@ -927,6 +1151,7 @@ export default function JawViewer() {
             cavities={cavities}
             voiceSelectedNames={voiceSelectedNames}
             focusMode={focusMode}
+            chewingMode={chewingMode}
             controlsRef={controlsRef}
           />
         </Center>

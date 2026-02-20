@@ -77,16 +77,52 @@ Important rules:
 - "Front teeth" = central incisor and lateral incisor in all quadrants
 - "Back teeth" = first molar and second molar in all quadrants
 
-TOOTH FUNCTION DESCRIPTIONS:
-When users describe teeth by their function, use this mapping:
-- "chewing teeth" / "grinding teeth" / "teeth for chewing/grinding" = first molar + second molar (all quadrants)
-- "biting teeth" / "cutting teeth" / "teeth for biting/cutting" = central incisor + lateral incisor (all quadrants)
-- "tearing teeth" / "ripping teeth" / "pointy teeth" / "fangs" = canine (all quadrants)
-- "strongest teeth" / "sharpest teeth" = canine (all quadrants)
-- "biggest teeth" / "largest teeth" = first molar + second molar (all quadrants)
-- "smallest teeth" = lateral incisor (all quadrants)
-- "eye teeth" = canine (all quadrants)
-- "wisdom teeth" / "third molars" = we don't have these in our model, return unknown
+DENTAL KNOWLEDGE BASE - USE THIS TO ANSWER INTELLIGENT QUERIES:
+
+🦷 FUNCTION-BASED QUERIES:
+- "teeth for cutting food" / "cutting teeth" / "biting teeth" = central incisor + lateral incisor (all quadrants)
+- "teeth that tear food" / "tearing teeth" / "ripping teeth" = canine (all quadrants)
+- "teeth that crush food" / "grinding teeth" / "crushing teeth" / "chewing teeth" = first premolar + second premolar + first molar + second molar (all quadrants)
+- "main chewing teeth" / "primary chewing teeth" = first molar + second molar (all quadrants)
+- "teeth that guide the bite" / "guide teeth" = canine (all quadrants) - they provide canine guidance
+
+💪 STRENGTH & SIZE QUERIES:
+- "strongest tooth" / "strongest teeth" = first molar (all quadrants) - largest surface area, thickest enamel, strongest bite force
+- "biggest surface area" / "largest surface area" = first molar (all quadrants)
+- "most bite force" / "handle most force" = first molar + second molar (all quadrants, especially first molars)
+- "longest teeth" / "longest roots" = canine (all quadrants)
+- "weakest teeth" / "most fragile" = central incisor + lateral incisor (lower quadrants only) - thin enamel, small roots
+
+📍 POSITION & SHAPE QUERIES:
+- "front teeth" = central incisor + lateral incisor + canine (all quadrants)
+- "back teeth" = first premolar + second premolar + first molar + second molar (all quadrants)
+- "teeth with one root" / "single root" = central incisor + lateral incisor + canine + first premolar + second premolar (varies)
+- "teeth with three roots" = first molar + second molar (upper quadrants only)
+- "teeth with two roots" = first molar + second molar (lower quadrants only)
+
+⚠️ COMMON DENTAL HEALTH QUERIES:
+- "teeth that get cavities most" / "cavity prone" = first molar + second molar (all quadrants) - deep grooves, harder to clean
+- "most visible when smiling" / "visible teeth" / "smile teeth" = central incisor + lateral incisor + canine (upper quadrants only)
+- "most likely to chip" / "chip easily" = central incisor (upper quadrants only)
+- "hardest to clean" / "difficult to clean" = first molar + second molar (all quadrants, especially back ones)
+- "important for facial structure" / "face structure" = canine + first molar (all quadrants) - maintain vertical dimension
+
+🧠 ADVANCED QUERIES:
+- "teeth that come in first" / "first to erupt" / "six year molars" = first molar (all quadrants)
+- "wisdom teeth" / "third molars" = NOT INCLUDED in this model, return unknown
+- "single-rooted front teeth" = central incisor + lateral incisor (all quadrants)
+- "most stable teeth" / "strongest anchorage" = canine (all quadrants) - longest roots
+- "teeth for speech" / "pronunciation teeth" / "speech sounds" = central incisor + lateral incisor (all quadrants) - for "f" and "v" sounds
+
+🦷 GUM QUERIES:
+Note: Gums are separate from teeth. If user asks about gums, respond with unknown as gums cannot be selected via this tooth selection system.
+- "upper gum" / "lower gum" / "gums" / "area that supports teeth" = return unknown (gums are not selectable teeth)
+
+GENERAL MAPPINGS:
+- "eye teeth" / "cuspid" = canine (all quadrants)
+- "bicuspid" / "premolar" without first/second = first premolar + second premolar
+- "incisor" without central/lateral = central incisor + lateral incisor
+- "molar" without first/second = first molar + second molar
 - "baby teeth" / "milk teeth" = return unknown (adult model only)
 
 Respond ONLY with a JSON object in this exact format:
