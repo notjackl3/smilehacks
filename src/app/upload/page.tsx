@@ -1,9 +1,11 @@
 'use client';
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function UploadPage() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const router = useRouter();
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -13,11 +15,17 @@ export default function UploadPage() {
     setImagePreview(previewUrl);
   }
 
+  function handleGenerate() {
+    if (!imagePreview) return;
+
+    // Navigate to homepage (app/page.tsx)
+    router.push("/");
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
       <div className="w-full max-w-xl px-6">
 
-        {/* Name + Description */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-semibold tracking-tight text-slate-900">
             OralVision
@@ -27,10 +35,8 @@ export default function UploadPage() {
           </p>
         </div>
 
-        {/* Upload Card */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 space-y-6">
 
-          {/* Upload Area */}
           <label
             htmlFor="fileInput"
             className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-8 cursor-pointer hover:border-slate-400 transition"
@@ -51,7 +57,6 @@ export default function UploadPage() {
             onChange={handleFileChange}
           />
 
-          {/* Image Preview (shown only if selected) */}
           {imagePreview && (
             <div className="rounded-xl overflow-hidden border border-slate-200">
               <img
@@ -62,8 +67,8 @@ export default function UploadPage() {
             </div>
           )}
 
-          {/* Generate Button */}
           <button
+            onClick={handleGenerate}
             className="w-full bg-slate-900 text-white text-sm py-2.5 rounded-lg hover:bg-slate-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={!imagePreview}
           >
