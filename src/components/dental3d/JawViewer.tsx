@@ -99,7 +99,7 @@ function JawModel() {
   useEffect(() => {
     const loader = new OBJLoader();
     loader.load(
-      '/models/jaw.obj',
+      '/models/theREALmodel.obj',
       (obj) => {
         // Calculate bounding box to normalize scale
         const box = new THREE.Box3().setFromObject(obj);
@@ -118,10 +118,15 @@ function JawModel() {
         obj.position.sub(center);
 
         console.log('Model loaded - size:', size, 'scale applied:', scale);
+        let meshCount = 0;
 
         // Apply material to all meshes
         obj.traverse((child) => {
           if (child instanceof THREE.Mesh) {
+            if (child instanceof THREE.Mesh) {
+              meshCount++;
+              console.log("Mesh:", meshCount, "name:", child.name || "(no name)", "geom:", child.geometry?.type);
+            }
             const material = new THREE.MeshStandardMaterial({
               color: '#f0ebe0',
               roughness: 0.4,
@@ -139,6 +144,7 @@ function JawModel() {
         });
 
         setModel(obj);
+        console.log("TOTAL meshes:", meshCount);
       },
       (progress) => {
         if (progress.total > 0) {
