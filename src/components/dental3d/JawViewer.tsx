@@ -1,7 +1,7 @@
 'use client';
 
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, Center } from '@react-three/drei';
+import { OrbitControls, Center, Html } from '@react-three/drei';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
@@ -9,7 +9,14 @@ import { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import VoiceCommand from './VoiceCommand';
 import DentistControlPanel from './DentistControlPanel';
 import PatientControlPanel from './PatientControlPanel';
-import { getPatientRecord, type PatientDentalRecord } from '@/lib/api';
+import {
+  getPatientRecord,
+  type PatientDentalRecord,
+  getAnnotations,
+  createAnnotation,
+  deleteAnnotation,
+  type Annotation as APIAnnotation
+} from '@/lib/api';
 
 interface PartInfo {
   name: string;
@@ -161,6 +168,18 @@ interface CavityPreviewData {
   normal: THREE.Vector3;
 }
 
+interface Annotation {
+  id: string;
+  toothName: string | null; // null for general notes
+  toothNumber: number | null; // null for general notes
+  position: THREE.Vector3 | null; // 3D position for tooth-specific notes, null for general
+  normal: THREE.Vector3 | null; // Surface normal for tooth-specific notes
+  text: string;
+  createdAt: Date;
+  createdBy: string; // doctor name/id
+  isPublic: boolean; // whether patients can see this note
+}
+
 function CavityMarker({ cavity, isPreview = false }: { cavity: Cavity; isPreview?: boolean }) {
   // Position slightly above surface
   const position = cavity.position.clone().add(cavity.normal.clone().multiplyScalar(0.002));
@@ -199,6 +218,73 @@ function CavityMarker({ cavity, isPreview = false }: { cavity: Cavity; isPreview
   );
 }
 
+// Annotation Label - shows a label with a line connecting to the tooth
+function AnnotationLabel({ annotation }: { annotation: Annotation }) {
+  if (!annotation.position) return null;
+
+  // Label position - offset upward and to the side from tooth position (further away from mouth)
+  const labelOffset = new THREE.Vector3(2, 2, 2);
+  const labelPosition = annotation.position.clone().add(labelOffset);
+
+  return (
+    <>
+      {/* Line connecting tooth to label */}
+      <Line
+        points={[
+          [annotation.position.x, annotation.position.y, annotation.position.z],
+          [labelPosition.x, labelPosition.y, labelPosition.z]
+        ]}
+        color="#6366f1"
+        lineWidth={2}
+      />
+
+      {/* HTML Label */}
+      <Html
+        position={labelPosition}
+        distanceFactor={10}
+        style={{
+          pointerEvents: 'none',
+          userSelect: 'none',
+        }}
+      >
+        <div className="bg-white border-2 border-indigo-500 rounded-lg shadow-lg px-3 py-2 max-w-[200px]">
+          <p className="text-xs text-gray-800 font-medium mb-1">
+            {annotation.toothNumber ? `Tooth #${annotation.toothNumber}` : 'General Note'}
+          </p>
+          <p className="text-xs text-gray-600 leading-tight">
+            {annotation.text}
+          </p>
+          <p className="text-[10px] text-gray-400 mt-1">
+            {annotation.createdBy}
+          </p>
+        </div>
+      </Html>
+    </>
+  );
+}
+
+// Simple line component for connecting pins to labels
+function Line({ points, color, lineWidth }: { points: [number, number, number][]; color: string; lineWidth: number }) {
+  const ref = useRef<THREE.Line>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(points.flat());
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+    ref.current.geometry = geometry;
+  }, [points]);
+
+  return (
+    <line ref={ref}>
+      <bufferGeometry />
+      <lineBasicMaterial color={color} linewidth={lineWidth} />
+    </line>
+  );
+}
+
 interface CavityMenuData {
   toothInfo: PartInfo;
   position: { x: number; y: number };
@@ -228,6 +314,16 @@ interface JawModelProps {
   ctScanCavities?: CTScanData['cavity'];
   onShowCavityMenu: (data: CavityMenuData | null) => void;
   jawModelRef?: React.RefObject<JawModelRef | null>;
+  annotationMode: boolean;
+  onShowAnnotationMenu: (data: {
+    toothInfo: PartInfo | null;
+    position: { x: number; y: number };
+    worldPosition?: THREE.Vector3;
+    normal?: THREE.Vector3;
+  } | null) => void;
+  annotations: Annotation[];
+  showAllAnnotations: boolean;
+  onUpdateAnnotationPositions: (updates: Array<{ id: string; position: THREE.Vector3; normal: THREE.Vector3 }>) => void;
 }
 
 function JawModel({
@@ -246,6 +342,11 @@ function JawModel({
   ctScanCavities = [],
   onShowCavityMenu,
   jawModelRef,
+  annotationMode,
+  onShowAnnotationMenu,
+  annotations,
+  showAllAnnotations,
+  onUpdateAnnotationPositions,
 }: JawModelProps) {
   const [model, setModel] = useState<THREE.Group | null>(null);
   const [cavityPreview, setCavityPreview] = useState<CavityPreviewData | null>(null);
@@ -339,16 +440,16 @@ function JawModel({
         }
 
         hoveredMeshId.current = mesh.id;
-        document.body.style.cursor = cavityMode ? 'crosshair' : 'pointer';
+        document.body.style.cursor = (cavityMode || annotationMode) ? 'crosshair' : 'pointer';
         onHover(info);
       } else {
         hoveredMeshId.current = null;
         setCavityPreview(null);
-        document.body.style.cursor = cavityMode ? 'crosshair' : 'grab';
+        document.body.style.cursor = (cavityMode || annotationMode) ? 'crosshair' : 'grab';
         onHover(null);
       }
     },
-    [model, camera, gl, onHover, selectedMeshId, getMeshInfo, cavityMode, setMeshHighlight, voiceSelectedNames]
+    [model, camera, gl, onHover, selectedMeshId, getMeshInfo, cavityMode, annotationMode, setMeshHighlight, voiceSelectedNames]
   );
 
   const handleClick = useCallback(
@@ -378,6 +479,24 @@ function JawModel({
           return;
         }
 
+        // Annotation mode - show annotation menu for tooth or general note
+        if (annotationMode) {
+          if (info.type === 'tooth') {
+            // Tooth-specific note - position will be calculated automatically
+            onShowAnnotationMenu({
+              toothInfo: info,
+              position: { x: event.clientX, y: event.clientY },
+            });
+          } else {
+            // General note (clicked on gum)
+            onShowAnnotationMenu({
+              toothInfo: null,
+              position: { x: event.clientX, y: event.clientY },
+            });
+          }
+          return;
+        }
+
         // Deselect previous
         if (selectedMeshId !== null) {
           setMeshHighlight(selectedMeshId, 0x000000, 0);
@@ -388,16 +507,22 @@ function JawModel({
           setMeshHighlight(mesh.id, 0x00ff00, 0.5);
         }
         onSelect(info);
-      } else if (!cavityMode && !focusMode) {
-        // Clicked on empty space - clear all selections (but not in focus mode)
+      } else if (!cavityMode && !annotationMode && !focusMode) {
+        // Clicked on empty space - clear all selections (but not in cavity/annotation/focus mode)
         if (selectedMeshId !== null) {
           setMeshHighlight(selectedMeshId, 0x000000, 0);
         }
         onSelect(null);
         onClickEmpty();
+      } else if (annotationMode) {
+        // In annotation mode, clicking empty space shows general note menu
+        onShowAnnotationMenu({
+          toothInfo: null,
+          position: { x: event.clientX, y: event.clientY },
+        });
       }
     },
-    [model, camera, gl, onSelect, selectedMeshId, getMeshInfo, cavityMode, onShowCavityMenu, setMeshHighlight, onClickEmpty, focusMode]
+    [model, camera, gl, onSelect, selectedMeshId, getMeshInfo, cavityMode, annotationMode, onShowCavityMenu, onShowAnnotationMenu, setMeshHighlight, onClickEmpty, focusMode]
   );
 
   const handlePointerLeave = useCallback(() => {
@@ -407,8 +532,8 @@ function JawModel({
     hoveredMeshId.current = null;
     setCavityPreview(null);
     onHover(null);
-    document.body.style.cursor = cavityMode ? 'crosshair' : 'grab';
-  }, [onHover, selectedMeshId, cavityMode, setMeshHighlight]);
+    document.body.style.cursor = (cavityMode || annotationMode) ? 'crosshair' : 'grab';
+  }, [onHover, selectedMeshId, cavityMode, annotationMode, setMeshHighlight]);
 
   useEffect(() => {
     const canvas = gl.domElement;
@@ -1063,6 +1188,89 @@ function JawModel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, ctScanCavities]);
 
+  // Calculate positions for annotations loaded from database
+  useEffect(() => {
+    if (!model) return;
+
+    // Find annotations without positions
+    const annotationsNeedingPositions = annotations.filter(a => !a.position && a.toothName);
+
+    if (annotationsNeedingPositions.length === 0) return;
+
+    console.log(`Calculating positions for ${annotationsNeedingPositions.length} annotations`);
+
+    const updates: Array<{ id: string; position: THREE.Vector3; normal: THREE.Vector3 }> = [];
+
+    annotationsNeedingPositions.forEach(annotation => {
+      if (!annotation.toothName) return;
+
+      const mesh = allMeshes.current.find(m => meshNames.current.get(m.id) === annotation.toothName);
+      if (!mesh || !mesh.geometry) {
+        console.warn(`Could not find mesh for annotation tooth: ${annotation.toothName}`);
+        return;
+      }
+
+      // Update mesh transforms
+      mesh.updateMatrixWorld(true);
+
+      // Get bounding box and calculate top surface position
+      const boundingBox = new THREE.Box3().setFromObject(mesh);
+      const center = boundingBox.getCenter(new THREE.Vector3());
+
+      // Use occlusal (top) surface as default position for database annotations
+      const direction = new THREE.Vector3(0, 1, 0);
+
+      const positionAttribute = mesh.geometry.getAttribute('position');
+      const normalAttribute = mesh.geometry.getAttribute('normal');
+
+      if (positionAttribute && normalAttribute) {
+        let bestVertex: THREE.Vector3 | null = null;
+        let bestNormal: THREE.Vector3 | null = null;
+        let bestScore = -Infinity;
+
+        const vertex = new THREE.Vector3();
+        const normal = new THREE.Vector3();
+        const worldVertex = new THREE.Vector3();
+        const worldNormal = new THREE.Vector3();
+
+        const sampleCount = Math.min(positionAttribute.count, 100);
+        const step = Math.floor(positionAttribute.count / sampleCount);
+
+        for (let i = 0; i < positionAttribute.count; i += step) {
+          vertex.fromBufferAttribute(positionAttribute, i);
+          normal.fromBufferAttribute(normalAttribute, i);
+
+          worldVertex.copy(vertex).applyMatrix4(mesh.matrixWorld);
+          worldNormal.copy(normal).transformDirection(mesh.matrixWorld).normalize();
+
+          const vertexDir = worldVertex.clone().sub(center).normalize();
+          const directionScore = vertexDir.dot(direction);
+          const normalScore = worldNormal.dot(direction);
+          const totalScore = directionScore * 0.7 + normalScore * 0.3;
+
+          if (totalScore > bestScore) {
+            bestScore = totalScore;
+            bestVertex = worldVertex.clone();
+            bestNormal = worldNormal.clone();
+          }
+        }
+
+        if (bestVertex && bestNormal) {
+          updates.push({
+            id: annotation.id,
+            position: bestVertex,
+            normal: bestNormal,
+          });
+        }
+      }
+    });
+
+    if (updates.length > 0) {
+      onUpdateAnnotationPositions(updates);
+      console.log(`Updated positions for ${updates.length} annotations`);
+    }
+  }, [model, annotations, onUpdateAnnotationPositions]);
+
   if (!model) {
     return (
       <mesh>
@@ -1093,6 +1301,13 @@ function JawModel({
           isPreview
         />
       )}
+      {/* Annotation labels - show labels with lines to teeth */}
+      {showAllAnnotations && annotations.map(annotation => (
+        <AnnotationLabel
+          key={annotation.id}
+          annotation={annotation}
+        />
+      ))}
     </group>
   );
 }
@@ -1103,14 +1318,22 @@ function Sidebar({
   onDelete,
   cavities,
   onRemoveCavity,
+  annotations,
+  onRemoveAnnotation,
+  allAnnotations,
 }: {
   selectedPart: PartInfo;
   onClose: () => void;
   onDelete: (name: string) => void;
   cavities: Cavity[];
   onRemoveCavity: (id: string) => void;
+  annotations: Annotation[];
+  onRemoveAnnotation: (id: string) => void;
+  allAnnotations: Annotation[];
 }) {
   const toothCavities = cavities.filter(c => c.toothName === selectedPart.name);
+  const toothAnnotations = annotations.filter(a => a.toothName === selectedPart.name);
+  const generalAnnotations = allAnnotations.filter(a => a.toothName === null);
 
   return (
     <div className="absolute right-0 top-0 h-full w-80 bg-white/95 backdrop-blur-sm border-l border-gray-200 p-4 z-20 flex flex-col overflow-y-auto shadow-lg text-right">
@@ -1172,9 +1395,85 @@ function Sidebar({
         </div>
       )}
 
-      <div className="bg-gray-50 rounded-lg p-4 mb-4 flex-1 border border-gray-200">
-        <p className="text-gray-500 text-sm">Additional information will appear here...</p>
-      </div>
+      {selectedPart.type === 'tooth' && (
+        <div className="bg-blue-50 rounded-lg p-4 mb-4 border border-blue-200">
+          <h3 className="text-gray-800 font-medium mb-2 flex items-center gap-2">
+            📝 Notes ({toothAnnotations.length})
+          </h3>
+          {toothAnnotations.length === 0 ? (
+            <p className="text-gray-500 text-sm">No notes on this tooth</p>
+          ) : (
+            <div className="space-y-2">
+              {toothAnnotations.map((annotation) => (
+                <div
+                  key={annotation.id}
+                  className="bg-white rounded px-3 py-2 border border-blue-200"
+                >
+                  <div className="flex items-start justify-between mb-1">
+                    <p className="text-gray-700 text-sm flex-1">{annotation.text}</p>
+                    <span className={`text-xs px-2 py-0.5 rounded ml-2 ${
+                      annotation.isPublic
+                        ? 'bg-green-100 text-green-700'
+                        : 'bg-gray-100 text-gray-700'
+                    }`}>
+                      {annotation.isPublic ? '👁️ Public' : '🔒 Private'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-gray-400">
+                      {annotation.createdBy} • {new Date(annotation.createdAt).toLocaleDateString()}
+                    </p>
+                    <button
+                      onClick={() => onRemoveAnnotation(annotation.id)}
+                      className="text-red-500 hover:text-red-600 text-xs"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {generalAnnotations.length > 0 && (
+        <div className="bg-purple-50 rounded-lg p-4 mb-4 border border-purple-200">
+          <h3 className="text-gray-800 font-medium mb-2 flex items-center gap-2">
+            📋 General Notes ({generalAnnotations.length})
+          </h3>
+          <div className="space-y-2">
+            {generalAnnotations.map((annotation) => (
+              <div
+                key={annotation.id}
+                className="bg-white rounded px-3 py-2 border border-purple-200"
+              >
+                <div className="flex items-start justify-between mb-1">
+                  <p className="text-gray-700 text-sm flex-1">{annotation.text}</p>
+                  <span className={`text-xs px-2 py-0.5 rounded ml-2 ${
+                    annotation.isPublic
+                      ? 'bg-green-100 text-green-700'
+                      : 'bg-gray-100 text-gray-700'
+                  }`}>
+                    {annotation.isPublic ? '👁️ Public' : '🔒 Private'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-gray-400">
+                    {annotation.createdBy} • {new Date(annotation.createdAt).toLocaleDateString()}
+                  </p>
+                  <button
+                    onClick={() => onRemoveAnnotation(annotation.id)}
+                    className="text-red-500 hover:text-red-600 text-xs"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-2">
         <button
@@ -1281,6 +1580,107 @@ function CavityPositionMenu({
   );
 }
 
+// Annotation Menu Component
+function AnnotationMenu({
+  menuData,
+  onSubmit,
+  onClose,
+}: {
+  menuData: { toothInfo: PartInfo | null; position: { x: number; y: number } };
+  onSubmit: (text: string, isPublic: boolean) => void;
+  onClose: () => void;
+}) {
+  const [noteText, setNoteText] = useState('');
+  const [isPublic, setIsPublic] = useState(true); // Default to public
+
+  const handleSubmit = () => {
+    if (noteText.trim()) {
+      onSubmit(noteText, isPublic);
+      onClose();
+    }
+  };
+
+  return (
+    <>
+      {/* Backdrop to close menu */}
+      <div
+        className="fixed inset-0 z-40"
+        onClick={onClose}
+      />
+
+      {/* Menu */}
+      <div
+        className="fixed z-50 bg-white rounded-lg shadow-xl border-2 border-blue-300 py-2 min-w-[320px]"
+        style={{
+          left: `${menuData.position.x}px`,
+          top: `${menuData.position.y}px`,
+        }}
+      >
+        <div className="px-4 py-2 border-b border-gray-200 bg-blue-50">
+          <p className="text-sm font-semibold text-gray-700">
+            {menuData.toothInfo ? `Add Note to ${menuData.toothInfo.displayName}` : 'Add General Note'}
+          </p>
+          {menuData.toothInfo && (
+            <p className="text-xs text-gray-500">Tooth #{menuData.toothInfo.toothNumber}</p>
+          )}
+        </div>
+        <div className="p-4">
+          <textarea
+            value={noteText}
+            onChange={(e) => setNoteText(e.target.value)}
+            placeholder="Enter your note here..."
+            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+            rows={4}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && e.ctrlKey) {
+                handleSubmit();
+              }
+            }}
+          />
+
+          {/* Public/Private Toggle */}
+          <div className="mt-3 flex items-center gap-2 p-2 bg-gray-50 rounded-md border border-gray-200">
+            <input
+              type="checkbox"
+              id="isPublic"
+              checked={isPublic}
+              onChange={(e) => setIsPublic(e.target.checked)}
+              className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+            />
+            <label htmlFor="isPublic" className="text-sm text-gray-700 cursor-pointer flex-1">
+              {isPublic ? (
+                <span>👁️ <strong>Public</strong> - Patient can see this note</span>
+              ) : (
+                <span>🔒 <strong>Private</strong> - Only visible to dentists</span>
+              )}
+            </label>
+          </div>
+
+          <div className="flex items-center justify-between mt-3">
+            <p className="text-xs text-gray-400">Ctrl+Enter to submit</p>
+            <div className="flex gap-2">
+              <button
+                onClick={onClose}
+                className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-md transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={!noteText.trim()}
+                className="px-3 py-1.5 text-sm bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+              >
+                Add Note
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function JawViewer() {
   const [hoveredPart, setHoveredPart] = useState<PartInfo | null>(null);
   const [selectedPart, setSelectedPart] = useState<PartInfo | null>(null);
@@ -1299,6 +1699,17 @@ export default function JawViewer() {
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [currentPatientId, setCurrentPatientId] = useState<string | null>(null);
 
+  // Annotations state
+  const [annotationMode, setAnnotationMode] = useState(false);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [showAllAnnotations, setShowAllAnnotations] = useState(false);
+  const [annotationMenuData, setAnnotationMenuData] = useState<{
+    toothInfo: PartInfo | null;
+    position: { x: number; y: number };
+    worldPosition?: THREE.Vector3;
+    normal?: THREE.Vector3;
+  } | null>(null);
+
   // Get current user from localStorage
   const [currentUser, setCurrentUser] = useState<{ id: string; username: string; role: 'dentist' | 'patient'; name: string } | null>(null);
 
@@ -1313,6 +1724,90 @@ export default function JawViewer() {
       }
     }
   }, []);
+
+  // Load patient dental record from database
+  const loadPatientDataFromDB = useCallback(async (patientId?: string) => {
+    try {
+      const record = await getPatientRecord(patientId);
+
+      // Convert database record to CT scan format
+      const ctData: CTScanData = {
+        scanId: record.scan_id || 'DB-' + record.id,
+        patientId: record.patient_id,
+        scanDate: record.scan_date,
+        removed: record.removed_teeth,
+        cavity: record.cavities,
+      };
+
+      setCTScanData(ctData);
+
+      // Apply removed teeth
+      const removedTeethNames = new Set<string>();
+      record.removed_teeth.forEach((toothNumber) => {
+        const objName = findObjectNameByToothNumber(toothNumber);
+        if (objName) {
+          removedTeethNames.add(objName);
+        }
+      });
+      setDeletedParts(removedTeethNames);
+
+      // Clear existing manually added cavities since we're loading from DB
+      setCavities([]);
+
+      // Load annotations from database
+      if (patientId) {
+        try {
+          const apiAnnotations = await getAnnotations(patientId);
+          console.log('Loaded annotations from database:', apiAnnotations);
+
+          // Convert API annotations to local Annotation format with 3D positions
+          let convertedAnnotations: Annotation[] = apiAnnotations.map((apiAnnotation: APIAnnotation) => {
+            // tooth_number === 0 means general note (not tied to a specific tooth)
+            const isGeneralNote = apiAnnotation.tooth_number === 0;
+
+            // Find the tooth object name from tooth number (null for general notes)
+            const objName = isGeneralNote ? null : findObjectNameByToothNumber(apiAnnotation.tooth_number);
+
+            return {
+              id: apiAnnotation.id,
+              toothName: objName,
+              toothNumber: isGeneralNote ? null : apiAnnotation.tooth_number,
+              position: null, // Will be calculated dynamically when rendering (for tooth-specific notes)
+              normal: null, // Will be calculated dynamically when rendering (for tooth-specific notes)
+              text: apiAnnotation.annotation_text,
+              createdAt: new Date(apiAnnotation.created_at),
+              createdBy: 'Doctor', // Could fetch dentist name from dentist_id if needed
+              isPublic: apiAnnotation.is_public,
+            };
+          });
+
+          // Filter to only public annotations if the current user is a patient
+          if (currentUser?.role === 'patient') {
+            convertedAnnotations = convertedAnnotations.filter(a => a.isPublic);
+            console.log(`Filtered to ${convertedAnnotations.length} public annotations for patient`);
+          }
+
+          setAnnotations(convertedAnnotations);
+        } catch (error) {
+          console.error('Failed to load annotations:', error);
+          // Don't fail the whole load if annotations fail
+        }
+      }
+
+      console.log('Patient data loaded from database:', record);
+    } catch (error) {
+      console.error('Failed to load patient data:', error);
+    }
+  }, [currentUser]);
+
+  // Auto-load patient data when a patient logs in
+  useEffect(() => {
+    if (currentUser?.role === 'patient' && currentUser.id && !currentPatientId) {
+      console.log('Auto-loading patient data for:', currentUser.id);
+      setCurrentPatientId(currentUser.id);
+      loadPatientDataFromDB(currentUser.id);
+    }
+  }, [currentUser, currentPatientId, loadPatientDataFromDB]);
 
   const handleVoiceCommand = useCallback((command: VoiceCommandResult) => {
     setLastVoiceCommand(command.rawTranscript || '');
@@ -1469,6 +1964,120 @@ export default function JawViewer() {
     setVoiceSelectedNames(new Set());
   }, []);
 
+  // Handle annotation submission
+  const handleAnnotationSubmit = useCallback(async (toothInfo: PartInfo | null, text: string, isPublic: boolean = true) => {
+    // Create local annotation first for immediate UI update
+    // Position will be calculated automatically by the useEffect that calculates positions
+    const newAnnotation: Annotation = {
+      id: `annotation_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
+      toothName: toothInfo?.name || null,
+      toothNumber: toothInfo?.toothNumber || null,
+      position: null, // Will be calculated automatically for tooth-specific notes
+      normal: null,   // Will be calculated automatically for tooth-specific notes
+      text: text,
+      createdAt: new Date(),
+      createdBy: currentUser?.name || 'Doctor',
+      isPublic: isPublic,
+    };
+
+    // Update local state immediately
+    setAnnotations(prev => [...prev, newAnnotation]);
+    console.log('Added annotation:', newAnnotation);
+
+    // Save to database if we have a patient ID and user is a dentist
+    if (currentPatientId && currentUser?.role === 'dentist') {
+      try {
+        // Use tooth number 0 for general notes (not tied to a specific tooth)
+        const toothNumberForDB = toothInfo?.toothNumber || 0;
+
+        const apiAnnotation = await createAnnotation(
+          currentPatientId,
+          toothNumberForDB,
+          text,
+          isPublic, // Use the isPublic flag from the form
+          currentUser.id
+        );
+        console.log('Annotation saved to database:', apiAnnotation);
+
+        // Update the local annotation with the database ID
+        setAnnotations(prev =>
+          prev.map(a =>
+            a.id === newAnnotation.id
+              ? { ...a, id: apiAnnotation.id }
+              : a
+          )
+        );
+      } catch (error) {
+        console.error('Failed to save annotation to database:', error);
+        // Keep the local annotation even if database save fails
+      }
+    }
+  }, [currentUser, currentPatientId]);
+
+  const handleRemoveAnnotation = useCallback(async (id: string) => {
+    // Remove from local state immediately
+    setAnnotations(prev => prev.filter(a => a.id !== id));
+
+    // Delete from database if it's a database annotation (not a temporary local one)
+    if (!id.startsWith('annotation_') && currentUser?.role === 'dentist') {
+      try {
+        await deleteAnnotation(id);
+        console.log('Annotation deleted from database:', id);
+      } catch (error) {
+        console.error('Failed to delete annotation from database:', error);
+        // Don't re-add to local state - user wanted it deleted
+      }
+    }
+  }, [currentUser]);
+
+  // Handle clear all annotations
+  const handleClearAllAnnotations = useCallback(async () => {
+    if (!currentPatientId || !currentUser || currentUser.role !== 'dentist') {
+      // If not a dentist or no patient loaded, just clear local state
+      setAnnotations([]);
+      return;
+    }
+
+    try {
+      // Delete all annotations from database
+      console.log(`Removing ${annotations.length} annotations from database`);
+      for (const annotation of annotations) {
+        // Only delete database annotations (not temporary local ones)
+        if (!annotation.id.startsWith('annotation_')) {
+          try {
+            await deleteAnnotation(annotation.id);
+          } catch (err) {
+            console.error(`Failed to delete annotation ${annotation.id}:`, err);
+          }
+        }
+      }
+
+      // Clear local state
+      setAnnotations([]);
+      console.log('All annotations cleared');
+    } catch (error) {
+      console.error('Failed to clear annotations:', error);
+    }
+  }, [annotations, currentPatientId, currentUser]);
+
+  // Update annotation positions when calculated from 3D model
+  const handleUpdateAnnotationPositions = useCallback((updates: Array<{ id: string; position: THREE.Vector3; normal: THREE.Vector3 }>) => {
+    setAnnotations(prev => {
+      const updated = [...prev];
+      updates.forEach(update => {
+        const index = updated.findIndex(a => a.id === update.id);
+        if (index !== -1) {
+          updated[index] = {
+            ...updated[index],
+            position: update.position,
+            normal: update.normal,
+          };
+        }
+      });
+      return updated;
+    });
+  }, []);
+
   // Handle restore all teeth
   const handleRestoreAll = useCallback(async () => {
     if (!currentPatientId || !currentUser || currentUser.role !== 'dentist') {
@@ -1549,41 +2158,6 @@ export default function JawViewer() {
     }
   }, [cavities, currentPatientId, currentUser]);
 
-  // Load patient dental record from database
-  const loadPatientDataFromDB = useCallback(async (patientId?: string) => {
-    try {
-      const record = await getPatientRecord(patientId);
-
-      // Convert database record to CT scan format
-      const ctData: CTScanData = {
-        scanId: record.scan_id || 'DB-' + record.id,
-        patientId: record.patient_id,
-        scanDate: record.scan_date,
-        removed: record.removed_teeth,
-        cavity: record.cavities,
-      };
-
-      setCTScanData(ctData);
-
-      // Apply removed teeth
-      const removedTeethNames = new Set<string>();
-      record.removed_teeth.forEach((toothNumber) => {
-        const objName = findObjectNameByToothNumber(toothNumber);
-        if (objName) {
-          removedTeethNames.add(objName);
-        }
-      });
-      setDeletedParts(removedTeethNames);
-
-      // Clear existing manually added cavities since we're loading from DB
-      setCavities([]);
-
-      console.log('Patient data loaded from database:', record);
-    } catch (error) {
-      console.error('Failed to load patient data:', error);
-    }
-  }, []);
-
   // Handle patient load from dentist panel
   const handlePatientLoad = useCallback((record: PatientDentalRecord) => {
     console.log('Patient loaded, setting current patient ID:', record.patient_id);
@@ -1620,7 +2194,10 @@ export default function JawViewer() {
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10">
         <div className="bg-white/95 backdrop-blur-sm rounded-lg border border-gray-200 shadow-sm px-2 py-2 flex items-center gap-2">
           <button
-            onClick={() => setCavityMode(!cavityMode)}
+            onClick={() => {
+              setCavityMode(!cavityMode);
+              if (!cavityMode) setAnnotationMode(false); // Turn off annotation mode when enabling cavity mode
+            }}
             className={`px-3 py-1.5 rounded-md font-medium transition-colors flex items-center gap-2 text-sm ${
               cavityMode
                 ? 'bg-red-500 text-white'
@@ -1629,9 +2206,25 @@ export default function JawViewer() {
           >
             {cavityMode ? 'Adding Cavities...' : 'Add Cavity'}
           </button>
-          {cavityMode && (
+          <button
+            onClick={() => {
+              setAnnotationMode(!annotationMode);
+              if (!annotationMode) setCavityMode(false); // Turn off cavity mode when enabling annotation mode
+            }}
+            className={`px-3 py-1.5 rounded-md font-medium transition-colors flex items-center gap-2 text-sm ${
+              annotationMode
+                ? 'bg-blue-500 text-white'
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            {annotationMode ? 'Adding Notes...' : 'Add Notes'}
+          </button>
+          {(cavityMode || annotationMode) && (
             <button
-              onClick={() => setCavityMode(false)}
+              onClick={() => {
+                setCavityMode(false);
+                setAnnotationMode(false);
+              }}
               className="px-3 py-1.5 rounded-md font-medium text-gray-700 hover:bg-gray-100 transition-colors text-sm"
             >
               Done
@@ -1642,6 +2235,17 @@ export default function JawViewer() {
 
       {/* Bottom right toolbar */}
       <div className="absolute right-4 bottom-4 z-10 bg-white/95 backdrop-blur-sm rounded-lg border border-gray-200 shadow-sm px-2 py-2 flex items-center gap-2">
+        <button
+          onClick={() => setShowAllAnnotations(!showAllAnnotations)}
+          className={`p-3 rounded-lg font-medium transition-colors flex items-center justify-center ${
+            showAllAnnotations
+              ? 'bg-purple-500 text-white'
+              : 'bg-white text-gray-700 hover:bg-purple-100 border border-gray-200'
+          }`}
+          title={showAllAnnotations ? 'Hide All Notes' : 'Show All Notes'}
+        >
+          <span className="text-sm">📝 {showAllAnnotations ? 'Hide' : 'Show'} Notes</span>
+        </button>
         <button
           onClick={() => setChewingMode(!chewingMode)}
           className={`p-3 rounded-lg font-medium transition-colors flex items-center justify-center ${
@@ -1728,6 +2332,19 @@ export default function JawViewer() {
             </button>
           </div>
         )}
+        {annotations.length > 0 && (
+          <div className="bg-indigo-50 backdrop-blur-sm rounded-lg px-4 py-2 border border-indigo-200 shadow-sm">
+            <p className="text-sm text-indigo-700">
+              📝 {annotations.length} note{annotations.length > 1 ? 's' : ''}
+            </p>
+            <button
+              onClick={handleClearAllAnnotations}
+              className="text-xs text-indigo-600 hover:text-indigo-700 mt-1"
+            >
+              Clear all
+            </button>
+          </div>
+        )}
         {voiceSelectedNames.size > 0 && (
           <div className="bg-cyan-50 backdrop-blur-sm rounded-lg px-4 py-2 border border-cyan-200 shadow-sm">
             <p className="text-sm text-cyan-700">
@@ -1750,6 +2367,9 @@ export default function JawViewer() {
           onDelete={handleDelete}
           cavities={cavities}
           onRemoveCavity={handleRemoveCavity}
+          annotations={annotations}
+          onRemoveAnnotation={handleRemoveAnnotation}
+          allAnnotations={annotations}
         />
       )}
 
@@ -1781,6 +2401,11 @@ export default function JawViewer() {
             ctScanCavities={ctScanData?.cavity}
             onShowCavityMenu={setCavityMenuData}
             jawModelRef={jawModelRef}
+            annotationMode={annotationMode}
+            onShowAnnotationMenu={setAnnotationMenuData}
+            annotations={annotations}
+            showAllAnnotations={showAllAnnotations}
+            onUpdateAnnotationPositions={handleUpdateAnnotationPositions}
           />
         </Center>
 
@@ -1800,6 +2425,21 @@ export default function JawViewer() {
           menuData={cavityMenuData}
           onSelect={(position) => handleCavityPositionSelect(cavityMenuData.toothInfo, position)}
           onClose={() => setCavityMenuData(null)}
+        />
+      )}
+
+      {/* Annotation Menu */}
+      {annotationMenuData && (
+        <AnnotationMenu
+          menuData={annotationMenuData}
+          onSubmit={(text, isPublic) => {
+            handleAnnotationSubmit(
+              annotationMenuData.toothInfo,
+              text,
+              isPublic
+            );
+          }}
+          onClose={() => setAnnotationMenuData(null)}
         />
       )}
 
