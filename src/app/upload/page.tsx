@@ -23,54 +23,45 @@ export default function UploadPage() {
     setImagePreview(previewUrl);
   }
 
-  async function handleGenerate() {
-    if (!file) return;
+async function handleGenerate() {
+  if (!file) return
 
-    setUploading(true);
-    setErrorMsg(null);
+  setUploading(true)
+  setErrorMsg(null)
 
-    try {
-      // 1) Get logged-in user (must be a dentist in your MVP)
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw userErr;
-      const user = userData.user;
-      if (!user) throw new Error("Not logged in.");
+  try {
+    const formData = new FormData()
+    formData.append("file", file)
 
-      // 2) You must know WHICH patient this upload is for.
-      // MVP placeholder: set this to a real patient UUID (from your UI selection).
-      const patientId = "PASTE_A_PATIENT_UUID_HERE";
+    const res = await fetch("/api/analyze-xray", {
+      method: "POST",
+      body: formData,
+    })
 
-      // 3) Upload to storage
-      const ext = file.name.split(".").pop() || "png";
-      const path = `patient/${patientId}/${crypto.randomUUID()}.${ext}`;
-
-      const { error: uploadErr } = await supabase
-        .storage
-        .from("xray-images")
-        .upload(path, file, { contentType: file.type });
-
-      if (uploadErr) throw uploadErr;
-
-      // 4) Insert metadata row
-      const { error: insertErr } = await supabase
-        .from("patient_images")
-        .insert({
-          patient_id: patientId,
-          uploaded_by: user.id,
-          storage_path: path,
-        });
-
-      if (insertErr) throw insertErr;
-
-      // 5) Navigate to viewer page
-      router.push("/");
-    } catch (err: any) {
-      console.error(err);
-      setErrorMsg(err?.message ?? "Upload failed.");
-    } finally {
-      setUploading(false);
+    if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`AI analysis failed (${res.status}): ${text}`)
     }
+
+    const analysis = await res.json()
+
+    // Create downloadable analysis.json
+    const blob = new Blob([JSON.stringify(analysis, null, 2)], {
+      type: "application/json",
+    })
+
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = "analysis.json"
+    a.click()
+
+  } catch (err: any) {
+    setErrorMsg(err?.message ?? "Analysis failed.")
+  } finally {
+    setUploading(false)
   }
+}
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
