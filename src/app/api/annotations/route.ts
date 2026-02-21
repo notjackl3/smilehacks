@@ -5,6 +5,7 @@ interface Annotation {
   id?: string;
   patient_id: string;
   dentist_id: string;
+  created_by: string;
   tooth_number: number;
   annotation_text: string;
   is_public: boolean;
@@ -20,7 +21,15 @@ export async function GET(request: NextRequest) {
     const patientId = searchParams.get('patientId');
     const toothNumber = searchParams.get('toothNumber');
 
-    let query = supabase.from('annotations').select('*');
+    // Join with users table to get creator's name
+    let query = supabase
+      .from('annotations')
+      .select(`
+        *,
+        creator:created_by (
+          username
+        )
+      `);
 
     // Optionally filter by patient
     if (patientId) {
@@ -59,29 +68,39 @@ export async function POST(request: NextRequest) {
     const supabase = createServerClient(request);
     const body: Omit<Annotation, 'id' | 'created_at' | 'updated_at'> = await request.json();
 
-    // Validate required fields
-    if (!body.patient_id || !body.dentist_id || !body.tooth_number || !body.annotation_text) {
+    // Validate required fields (tooth_number can be 0 for general notes)
+    if (!body.patient_id || !body.dentist_id || !body.created_by || body.tooth_number === undefined || body.tooth_number === null || !body.annotation_text) {
       return NextResponse.json(
-        { error: 'Missing required fields: patient_id, dentist_id, tooth_number, annotation_text' },
+        { error: 'Missing required fields: patient_id, dentist_id, created_by, tooth_number, annotation_text' },
         { status: 400 }
       );
     }
 
-    // Validate tooth number
-    const validToothNumbers = [2,3,4,5,6,7,8,9,10,11,12,13,14,15,18,19,20,21,22,23,24,25,26,27,28,29,30,31];
+    // Validate tooth number (0 = general note, not tied to specific tooth)
+    const validToothNumbers = [0, 2,3,4,5,6,7,8,9,10,11,12,13,14,15,18,19,20,21,22,23,24,25,26,27,28,29,30,31];
     if (!validToothNumbers.includes(body.tooth_number)) {
       return NextResponse.json(
-        { error: `Invalid tooth number: ${body.tooth_number}. Must be one of: ${validToothNumbers.join(', ')}` },
+        { error: `Invalid tooth number: ${body.tooth_number}. Must be one of: ${validToothNumbers.join(', ')} (0 = general note)` },
         { status: 400 }
       );
     }
 
     // Create annotation
+    console.log('Creating annotation with data:', {
+      patient_id: body.patient_id,
+      dentist_id: body.dentist_id,
+      created_by: body.created_by,
+      tooth_number: body.tooth_number,
+      annotation_text: body.annotation_text,
+      is_public: body.is_public ?? false,
+    });
+
     const { data: annotation, error } = await supabase
       .from('annotations')
       .insert({
         patient_id: body.patient_id,
         dentist_id: body.dentist_id,
+        created_by: body.created_by,
         tooth_number: body.tooth_number,
         annotation_text: body.annotation_text,
         is_public: body.is_public ?? false,
@@ -91,7 +110,11 @@ export async function POST(request: NextRequest) {
 
     if (error) {
       console.error('Error creating annotation:', error);
-      return NextResponse.json({ error: 'Failed to create annotation' }, { status: 500 });
+      return NextResponse.json({
+        error: 'Failed to create annotation',
+        details: error.message,
+        code: error.code
+      }, { status: 500 });
     }
 
     return NextResponse.json({

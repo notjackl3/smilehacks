@@ -218,12 +218,138 @@ function CavityMarker({ cavity, isPreview = false }: { cavity: Cavity; isPreview
   );
 }
 
+// General Notes Carousel - auto-scrolls through general notes
+function GeneralNotesCarousel({ notes }: { notes: Annotation[] }) {
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  useEffect(() => {
+    if (notes.length <= 1) return;
+
+    const interval = setInterval(() => {
+      setCurrentIndex(prev => (prev + 1) % notes.length);
+    }, 3000); // Change note every 3 seconds
+
+    return () => clearInterval(interval);
+  }, [notes.length]);
+
+  if (notes.length === 0) return null;
+
+  return (
+    <div className="absolute top-1/2 -translate-y-1/2 left-4 z-10 max-w-sm">
+      <div className="relative">
+        {notes.length > 1 ? (
+          // Carousel mode for multiple notes
+          <div className="relative overflow-hidden">
+            <div
+              className="transition-transform duration-500 ease-in-out"
+              style={{ transform: `translateY(-${currentIndex * 100}%)` }}
+            >
+              {notes.map((annotation, index) => (
+                <div
+                  key={annotation.id}
+                  className="mb-3"
+                >
+                  <div className="bg-white/80 backdrop-blur-sm border border-indigo-300 rounded-lg shadow-sm px-4 py-2.5">
+                    <div className="flex items-start justify-between mb-1.5">
+                      <span className="text-xs font-semibold text-indigo-600">
+                        GENERAL NOTE ({index + 1}/{notes.length})
+                      </span>
+                      <span className="text-[9px] text-gray-400">
+                        {new Date(annotation.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-700 leading-snug mb-1.5">
+                      {annotation.text}
+                    </p>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-600 font-medium">
+                        {annotation.createdBy}
+                      </span>
+                      {!annotation.isPublic && (
+                        <span className="text-xs text-orange-600 font-medium">
+                          Private
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Pagination dots */}
+            <div className="flex justify-center gap-1.5 mt-2">
+              {notes.map((_, index) => (
+                <button
+                  key={index}
+                  onClick={() => setCurrentIndex(index)}
+                  className={`w-2 h-2 rounded-full transition-colors ${
+                    index === currentIndex ? 'bg-indigo-500' : 'bg-gray-300'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          // Single note display
+          <div className="bg-white/80 backdrop-blur-sm border border-indigo-300 rounded-lg shadow-sm px-4 py-2.5">
+            <p className="text-sm text-gray-700 leading-snug mb-1.5">
+              {notes[0].text}
+            </p>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-600 font-medium">
+                {notes[0].createdBy}
+              </span>
+              {!notes[0].isPublic && (
+                <span className="text-xs text-orange-600 font-medium">
+                  Private
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Annotation Label - shows a label with a line connecting to the tooth
-function AnnotationLabel({ annotation }: { annotation: Annotation }) {
+function AnnotationLabel({
+  annotation,
+  allAnnotations
+}: {
+  annotation: Annotation;
+  allAnnotations: Annotation[];
+}) {
   if (!annotation.position) return null;
 
-  // Label position - offset upward and to the side from tooth position (further away from mouth)
-  const labelOffset = new THREE.Vector3(2, 2, 2);
+  // Calculate smart offset to avoid overlaps with other annotations
+  const calculateLabelOffset = () => {
+    const minOffset = new THREE.Vector3(0, 1.5, 0); // Minimum offset
+    const currentPos = annotation.position!;
+
+    // Check for nearby annotations and adjust offset
+    let additionalOffset = new THREE.Vector3(0, 0, 0);
+    let overlapCount = 0;
+
+    for (const other of allAnnotations) {
+      if (other.id === annotation.id || !other.position) continue;
+
+      // Calculate distance between tooth positions
+      const distance = currentPos.distanceTo(other.position);
+
+      // If annotations are on nearby teeth (within 0.5 units)
+      if (distance < 0.5) {
+        overlapCount++;
+        // Stack them vertically and horizontally
+        additionalOffset.y += 0.4;
+        additionalOffset.x += 0.2 * (overlapCount % 2 === 0 ? 1 : -1);
+      }
+    }
+
+    return minOffset.clone().add(additionalOffset);
+  };
+
+  const labelOffset = calculateLabelOffset();
   const labelPosition = annotation.position.clone().add(labelOffset);
 
   return (
@@ -247,14 +373,11 @@ function AnnotationLabel({ annotation }: { annotation: Annotation }) {
           userSelect: 'none',
         }}
       >
-        <div className="bg-white border-2 border-indigo-500 rounded-lg shadow-lg px-3 py-2 max-w-[200px]">
-          <p className="text-xs text-gray-800 font-medium mb-1">
-            {annotation.toothNumber ? `Tooth #${annotation.toothNumber}` : 'General Note'}
-          </p>
-          <p className="text-xs text-gray-600 leading-tight">
+        <div className="bg-white border border-indigo-400 rounded shadow-md px-1.5 py-1 max-w-[120px]">
+          <p className="text-[6px] text-gray-600 leading-tight">
             {annotation.text}
           </p>
-          <p className="text-[10px] text-gray-400 mt-1">
+          <p className="text-[5px] text-gray-400 mt-0.5">
             {annotation.createdBy}
           </p>
         </div>
@@ -1301,11 +1424,12 @@ function JawModel({
           isPreview
         />
       )}
-      {/* Annotation labels - show labels with lines to teeth */}
-      {showAllAnnotations && annotations.map(annotation => (
+      {/* Annotation labels - show labels with lines to teeth (hide when sidebar is open) */}
+      {showAllAnnotations && selectedMeshId === null && annotations.map(annotation => (
         <AnnotationLabel
           key={annotation.id}
           annotation={annotation}
+          allAnnotations={annotations}
         />
       ))}
     </group>
@@ -1336,25 +1460,33 @@ function Sidebar({
   const generalAnnotations = allAnnotations.filter(a => a.toothName === null);
 
   return (
-    <div className="absolute right-0 top-0 h-full w-80 bg-white/95 backdrop-blur-sm border-l border-gray-200 p-4 z-20 flex flex-col overflow-y-auto shadow-lg text-right">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-gray-800">Part Details</h2>
-        <button
-          onClick={onClose}
-          className="text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
+    <>
+      {/* Backdrop overlay */}
+      <div
+        className="absolute inset-0 bg-white/70 z-10"
+        onClick={onClose}
+      />
+
+      {/* Sidebar */}
+      <div className="absolute right-0 top-0 h-full w-80 bg-white/95 backdrop-blur-sm border-l border-gray-200 p-4 z-20 flex flex-col overflow-y-auto shadow-lg text-right">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-800">Part Details</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
 
       <div className="bg-gray-50 rounded-lg p-4 mb-4 border border-gray-200">
         <div className="flex items-center gap-2 mb-2 justify-end">
           <span className="text-gray-800 font-medium">
             {selectedPart.displayName || selectedPart.name}
           </span>
-          <span className="text-2xl">{selectedPart.type === 'tooth' ? '🦷' : ''}</span>
+          <span className="text-2xl">{selectedPart.type === 'tooth' ? '' : ''}</span>
         </div>
         {selectedPart.quadrant && (
           <p className="text-gray-500 text-sm mb-1">{selectedPart.quadrant}</p>
@@ -1381,7 +1513,7 @@ function Sidebar({
                   key={cavity.id}
                   className="flex items-center justify-between bg-white rounded px-3 py-2 border border-gray-200"
                 >
-                  <span className="text-gray-700 text-sm">Cavity #{idx + 1}</span>
+                  <span className="text-gray-700 text-sm">{selectedPart.displayName || selectedPart.name} - Cavity #{idx + 1}</span>
                   <button
                     onClick={() => onRemoveCavity(cavity.id)}
                     className="text-red-500 hover:text-red-600 text-sm"
@@ -1396,9 +1528,9 @@ function Sidebar({
       )}
 
       {selectedPart.type === 'tooth' && (
-        <div className="bg-blue-50 rounded-lg p-4 mb-4 border border-blue-200">
+        <div className="bg-gray-50 rounded-lg p-4 mb-4 border border-gray-200">
           <h3 className="text-gray-800 font-medium mb-2 flex items-center gap-2">
-            📝 Notes ({toothAnnotations.length})
+            Notes ({toothAnnotations.length})
           </h3>
           {toothAnnotations.length === 0 ? (
             <p className="text-gray-500 text-sm">No notes on this tooth</p>
@@ -1407,7 +1539,7 @@ function Sidebar({
               {toothAnnotations.map((annotation) => (
                 <div
                   key={annotation.id}
-                  className="bg-white rounded px-3 py-2 border border-blue-200"
+                  className="bg-white rounded px-3 py-2 border border-gray-200"
                 >
                   <div className="flex items-start justify-between mb-1">
                     <p className="text-gray-700 text-sm flex-1">{annotation.text}</p>
@@ -1416,7 +1548,7 @@ function Sidebar({
                         ? 'bg-green-100 text-green-700'
                         : 'bg-gray-100 text-gray-700'
                     }`}>
-                      {annotation.isPublic ? '👁️ Public' : '🔒 Private'}
+                      {annotation.isPublic ? 'Public' : 'Private'}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -1438,15 +1570,15 @@ function Sidebar({
       )}
 
       {generalAnnotations.length > 0 && (
-        <div className="bg-purple-50 rounded-lg p-4 mb-4 border border-purple-200">
+        <div className="bg-gray-50 rounded-lg p-4 mb-4 border border-gray-200">
           <h3 className="text-gray-800 font-medium mb-2 flex items-center gap-2">
-            📋 General Notes ({generalAnnotations.length})
+            General Notes ({generalAnnotations.length})
           </h3>
           <div className="space-y-2">
             {generalAnnotations.map((annotation) => (
               <div
                 key={annotation.id}
-                className="bg-white rounded px-3 py-2 border border-purple-200"
+                className="bg-white rounded px-3 py-2 border border-gray-200"
               >
                 <div className="flex items-start justify-between mb-1">
                   <p className="text-gray-700 text-sm flex-1">{annotation.text}</p>
@@ -1455,7 +1587,7 @@ function Sidebar({
                       ? 'bg-green-100 text-green-700'
                       : 'bg-gray-100 text-gray-700'
                   }`}>
-                    {annotation.isPublic ? '👁️ Public' : '🔒 Private'}
+                    {annotation.isPublic ? 'Public' : 'Private'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
@@ -1487,6 +1619,7 @@ function Sidebar({
         </button>
       </div>
     </div>
+    </>
   );
 }
 
@@ -1650,9 +1783,9 @@ function AnnotationMenu({
             />
             <label htmlFor="isPublic" className="text-sm text-gray-700 cursor-pointer flex-1">
               {isPublic ? (
-                <span>👁️ <strong>Public</strong> - Patient can see this note</span>
+                <span><strong>Public</strong> - Patient can see this note</span>
               ) : (
-                <span>🔒 <strong>Private</strong> - Only visible to dentists</span>
+                <span><strong>Private</strong> - Only visible to dentists</span>
               )}
             </label>
           </div>
@@ -1768,6 +1901,9 @@ export default function JawViewer() {
             // Find the tooth object name from tooth number (null for general notes)
             const objName = isGeneralNote ? null : findObjectNameByToothNumber(apiAnnotation.tooth_number);
 
+            // Get creator's name from the joined user data
+            const creatorName = apiAnnotation.creator?.username || 'Unknown';
+
             return {
               id: apiAnnotation.id,
               toothName: objName,
@@ -1776,7 +1912,7 @@ export default function JawViewer() {
               normal: null, // Will be calculated dynamically when rendering (for tooth-specific notes)
               text: apiAnnotation.annotation_text,
               createdAt: new Date(apiAnnotation.created_at),
-              createdBy: 'Doctor', // Could fetch dentist name from dentist_id if needed
+              createdBy: creatorName,
               isPublic: apiAnnotation.is_public,
             };
           });
@@ -1904,6 +2040,13 @@ export default function JawViewer() {
     setSelectedPart(null);
   };
 
+  // Hide notes when sidebar is opened
+  useEffect(() => {
+    if (selectedPart) {
+      setShowAllAnnotations(false);
+    }
+  }, [selectedPart]);
+
   // Handle cavity position selection from menu
   const handleCavityPositionSelect = useCallback(async (
     toothInfo: PartInfo,
@@ -1984,20 +2127,34 @@ export default function JawViewer() {
     setAnnotations(prev => [...prev, newAnnotation]);
     console.log('Added annotation:', newAnnotation);
 
-    // Save to database if we have a patient ID and user is a dentist
-    if (currentPatientId && currentUser?.role === 'dentist') {
+    // Save to database if we have a patient ID and current user
+    if (currentPatientId && currentUser) {
       try {
         // Use tooth number 0 for general notes (not tied to a specific tooth)
         const toothNumberForDB = toothInfo?.toothNumber || 0;
+
+        // For patients, use their own ID as the dentist_id (creator ID)
+        // For dentists, use their dentist ID
+        const creatorId = currentUser.id;
+
+        console.log('Attempting to save annotation to database:', {
+          patientId: currentPatientId,
+          toothNumber: toothNumberForDB,
+          text: text,
+          isPublic: isPublic,
+          creatorId: creatorId,
+          userRole: currentUser.role,
+          isGeneralNote: toothNumberForDB === 0
+        });
 
         const apiAnnotation = await createAnnotation(
           currentPatientId,
           toothNumberForDB,
           text,
           isPublic, // Use the isPublic flag from the form
-          currentUser.id
+          creatorId
         );
-        console.log('Annotation saved to database:', apiAnnotation);
+        console.log('✓ Annotation saved to database successfully:', apiAnnotation);
 
         // Update the local annotation with the database ID
         setAnnotations(prev =>
@@ -2008,9 +2165,15 @@ export default function JawViewer() {
           )
         );
       } catch (error) {
-        console.error('Failed to save annotation to database:', error);
+        console.error('✗ Failed to save annotation to database:', error);
+        console.error('Error details:', JSON.stringify(error, null, 2));
         // Keep the local annotation even if database save fails
       }
+    } else {
+      console.log('Not saving to database - missing patient ID or user', {
+        hasPatientId: !!currentPatientId,
+        hasUser: !!currentUser
+      });
     }
   }, [currentUser, currentPatientId]);
 
@@ -2244,7 +2407,7 @@ export default function JawViewer() {
           }`}
           title={showAllAnnotations ? 'Hide All Notes' : 'Show All Notes'}
         >
-          <span className="text-sm">📝 {showAllAnnotations ? 'Hide' : 'Show'} Notes</span>
+          <span className="text-lg">{showAllAnnotations ? 'Hide' : 'Show'} Notes</span>
         </button>
         <button
           onClick={() => setChewingMode(!chewingMode)}
@@ -2255,7 +2418,7 @@ export default function JawViewer() {
           }`}
           title={chewingMode ? 'Chewing...' : 'Chewing Animation'}
         >
-          <span className="text-lg">{chewingMode ? '⏸️' : '🦷'} Chew</span>
+          <span className="text-lg">{chewingMode ? 'Pause' : 'Chew'}</span>
         </button>
         <button
           onClick={() => setFocusMode(!focusMode)}
@@ -2305,6 +2468,13 @@ export default function JawViewer() {
         </div>
       )}
 
+      {/* General Notes Carousel - Left Side (Centered Vertically) */}
+      {!selectedPart && (
+        <GeneralNotesCarousel
+          notes={annotations.filter(a => a.toothNumber === null || a.toothNumber === 0)}
+        />
+      )}
+
       <div className="absolute bottom-4 left-4 z-10 flex gap-2">
         {deletedParts.size > 0 && (
           <div className="bg-white/90 backdrop-blur-sm rounded-lg px-4 py-2 border border-gray-200 shadow-sm">
@@ -2335,7 +2505,7 @@ export default function JawViewer() {
         {annotations.length > 0 && (
           <div className="bg-indigo-50 backdrop-blur-sm rounded-lg px-4 py-2 border border-indigo-200 shadow-sm">
             <p className="text-sm text-indigo-700">
-              📝 {annotations.length} note{annotations.length > 1 ? 's' : ''}
+              {annotations.length} note{annotations.length > 1 ? 's' : ''}
             </p>
             <button
               onClick={handleClearAllAnnotations}
@@ -2348,7 +2518,7 @@ export default function JawViewer() {
         {voiceSelectedNames.size > 0 && (
           <div className="bg-cyan-50 backdrop-blur-sm rounded-lg px-4 py-2 border border-cyan-200 shadow-sm">
             <p className="text-sm text-cyan-700">
-              🎤 {voiceSelectedNames.size} teeth selected
+              {voiceSelectedNames.size} teeth selected
             </p>
             <button
               onClick={() => setVoiceSelectedNames(new Set())}

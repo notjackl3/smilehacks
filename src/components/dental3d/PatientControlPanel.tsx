@@ -29,6 +29,48 @@ export default function PatientControlPanel({
   const [signingOut, setSigningOut] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // Helper function to get tooth name from tooth number
+  const getToothName = (toothNumber: number): string => {
+    if (toothNumber === 0) return 'General Note';
+
+    const toothMap: Record<number, { name: string; quadrant: string }> = {
+      // Upper Right
+      8: { name: 'Central Incisor', quadrant: 'Upper Right' },
+      7: { name: 'Lateral Incisor', quadrant: 'Upper Right' },
+      6: { name: 'Canine', quadrant: 'Upper Right' },
+      5: { name: 'First Premolar', quadrant: 'Upper Right' },
+      4: { name: 'Second Premolar', quadrant: 'Upper Right' },
+      3: { name: 'First Molar', quadrant: 'Upper Right' },
+      2: { name: 'Second Molar', quadrant: 'Upper Right' },
+      // Upper Left
+      9: { name: 'Central Incisor', quadrant: 'Upper Left' },
+      10: { name: 'Lateral Incisor', quadrant: 'Upper Left' },
+      11: { name: 'Canine', quadrant: 'Upper Left' },
+      12: { name: 'First Premolar', quadrant: 'Upper Left' },
+      13: { name: 'Second Premolar', quadrant: 'Upper Left' },
+      14: { name: 'First Molar', quadrant: 'Upper Left' },
+      15: { name: 'Second Molar', quadrant: 'Upper Left' },
+      // Lower Right
+      25: { name: 'Central Incisor', quadrant: 'Lower Right' },
+      26: { name: 'Lateral Incisor', quadrant: 'Lower Right' },
+      27: { name: 'Canine', quadrant: 'Lower Right' },
+      28: { name: 'First Premolar', quadrant: 'Lower Right' },
+      29: { name: 'Second Premolar', quadrant: 'Lower Right' },
+      30: { name: 'First Molar', quadrant: 'Lower Right' },
+      31: { name: 'Second Molar', quadrant: 'Lower Right' },
+      // Lower Left
+      24: { name: 'Central Incisor', quadrant: 'Lower Left' },
+      23: { name: 'Lateral Incisor', quadrant: 'Lower Left' },
+      22: { name: 'Canine', quadrant: 'Lower Left' },
+      21: { name: 'First Premolar', quadrant: 'Lower Left' },
+      20: { name: 'Second Premolar', quadrant: 'Lower Left' },
+      19: { name: 'First Molar', quadrant: 'Lower Left' },
+      18: { name: 'Second Molar', quadrant: 'Lower Left' },
+    };
+    const tooth = toothMap[toothNumber];
+    return tooth ? `${tooth.name} (${tooth.quadrant})` : `Tooth #${toothNumber}`;
+  };
+
   // Load patient's own data on mount
   useEffect(() => {
     if (patientId) {
@@ -109,32 +151,14 @@ export default function PatientControlPanel({
         My Info
       </button>
 
-      {/* Sliding Panel */}
+      {/* Fullscreen Panel */}
       <div
-        className={`fixed top-0 right-0 h-full w-[28rem] bg-white shadow-2xl transform transition-transform duration-300 ease-in-out z-40 ${
+        className={`fixed inset-0 bg-white transform transition-transform duration-300 ease-in-out z-40 ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
-        <div className="h-full flex flex-col">
-          {/* Header */}
-          <div className="bg-blue-500 text-white p-4 flex items-center justify-between">
-            <h2 className="text-xl font-bold">Patient Portal</h2>
-            <button
-              onClick={onToggle}
-              className="text-white hover:bg-blue-600 p-2 rounded-lg transition-colors"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
+        <div className="h-full flex flex-col items-center justify-center">
+          <div className="w-[28rem] h-full max-h-[90vh] flex flex-col">
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {/* Patient ID Card */}
@@ -190,7 +214,7 @@ export default function PatientControlPanel({
                     {/* Dental Summary */}
                     <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                       <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                        <span>🦷</span> Your Dental Summary
+                        Your Dental Summary
                       </h3>
                       <div className="space-y-2 text-sm">
                         <div className="flex justify-between items-center p-2 bg-white rounded">
@@ -219,7 +243,7 @@ export default function PatientControlPanel({
                     {/* Notes from Dentist */}
                     <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
                       <h3 className="font-semibold text-yellow-800 mb-3 flex items-center gap-2">
-                        <span>📝</span> Notes from Your Dentist ({annotations.length})
+                        Notes from Your Dentist ({annotations.length})
                       </h3>
 
                       {annotations.length === 0 ? (
@@ -232,8 +256,8 @@ export default function PatientControlPanel({
                               className="bg-white rounded-lg p-3 border border-yellow-200"
                             >
                               <div className="flex items-start justify-between mb-2">
-                                <span className="bg-blue-100 text-blue-800 text-xs font-semibold px-2 py-1 rounded">
-                                  Tooth #{annotation.tooth_number}
+                                <span className="font-medium text-gray-800 py-1 rounded">
+                                  {getToothName(annotation.tooth_number)}
                                 </span>
                                 <span className="text-xs text-gray-500">
                                   {new Date(annotation.created_at).toLocaleDateString()}
@@ -251,32 +275,100 @@ export default function PatientControlPanel({
                       <div className="bg-orange-50 rounded-lg p-4 border border-orange-200">
                         <h3 className="font-semibold text-orange-800 mb-3">Cavity Details</h3>
                         <div className="space-y-2">
-                          {patientRecord.cavities.map((cavity, idx) => (
-                            <div
-                              key={idx}
-                              className="bg-white rounded-lg p-3 border border-orange-200 text-sm"
-                            >
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="font-medium text-gray-800">
-                                  Tooth #{cavity.toothNumber}
-                                </span>
-                                <span
-                                  className={`text-xs font-semibold px-2 py-1 rounded ${
-                                    cavity.severity === 'severe'
-                                      ? 'bg-red-100 text-red-800'
-                                      : cavity.severity === 'moderate'
-                                      ? 'bg-orange-100 text-orange-800'
-                                      : 'bg-yellow-100 text-yellow-800'
-                                  }`}
+                          {(() => {
+                            // Helper function to get tooth name from tooth number
+                            const getToothName = (toothNumber: number): string => {
+                              const toothMap: Record<number, { name: string; quadrant: string }> = {
+                                // Upper Right
+                                8: { name: 'Central Incisor', quadrant: 'Upper Right' },
+                                7: { name: 'Lateral Incisor', quadrant: 'Upper Right' },
+                                6: { name: 'Canine', quadrant: 'Upper Right' },
+                                5: { name: 'First Premolar', quadrant: 'Upper Right' },
+                                4: { name: 'Second Premolar', quadrant: 'Upper Right' },
+                                3: { name: 'First Molar', quadrant: 'Upper Right' },
+                                2: { name: 'Second Molar', quadrant: 'Upper Right' },
+                                // Upper Left
+                                9: { name: 'Central Incisor', quadrant: 'Upper Left' },
+                                10: { name: 'Lateral Incisor', quadrant: 'Upper Left' },
+                                11: { name: 'Canine', quadrant: 'Upper Left' },
+                                12: { name: 'First Premolar', quadrant: 'Upper Left' },
+                                13: { name: 'Second Premolar', quadrant: 'Upper Left' },
+                                14: { name: 'First Molar', quadrant: 'Upper Left' },
+                                15: { name: 'Second Molar', quadrant: 'Upper Left' },
+                                // Lower Right
+                                25: { name: 'Central Incisor', quadrant: 'Lower Right' },
+                                26: { name: 'Lateral Incisor', quadrant: 'Lower Right' },
+                                27: { name: 'Canine', quadrant: 'Lower Right' },
+                                28: { name: 'First Premolar', quadrant: 'Lower Right' },
+                                29: { name: 'Second Premolar', quadrant: 'Lower Right' },
+                                30: { name: 'First Molar', quadrant: 'Lower Right' },
+                                31: { name: 'Second Molar', quadrant: 'Lower Right' },
+                                // Lower Left
+                                24: { name: 'Central Incisor', quadrant: 'Lower Left' },
+                                23: { name: 'Lateral Incisor', quadrant: 'Lower Left' },
+                                22: { name: 'Canine', quadrant: 'Lower Left' },
+                                21: { name: 'First Premolar', quadrant: 'Lower Left' },
+                                20: { name: 'Second Premolar', quadrant: 'Lower Left' },
+                                19: { name: 'First Molar', quadrant: 'Lower Left' },
+                                18: { name: 'Second Molar', quadrant: 'Lower Left' },
+                              };
+                              const tooth = toothMap[toothNumber];
+                              return tooth ? `${tooth.name} (${tooth.quadrant})` : `Tooth #${toothNumber}`;
+                            };
+
+                            // Group cavities by tooth number
+                            const cavitiesByTooth = patientRecord.cavities.reduce((acc, cavity) => {
+                              if (!acc[cavity.toothNumber]) {
+                                acc[cavity.toothNumber] = [];
+                              }
+                              acc[cavity.toothNumber].push(cavity);
+                              return acc;
+                            }, {} as Record<number, typeof patientRecord.cavities>);
+
+                            // Calculate aggregated severity based on cavity count
+                            const getAggregatedSeverity = (count: number): 'mild' | 'moderate' | 'severe' | 'critical' => {
+                              if (count === 1) return 'mild';
+                              if (count === 2) return 'moderate';
+                              if (count === 3) return 'severe';
+                              return 'critical';
+                            };
+
+                            return Object.entries(cavitiesByTooth).map(([toothNumber, toothCavities]) => {
+                              const count = toothCavities.length;
+                              const severity = getAggregatedSeverity(count);
+                              const positions = toothCavities.map(c => c.position).join(', ');
+                              const toothName = getToothName(Number(toothNumber));
+
+                              return (
+                                <div
+                                  key={toothNumber}
+                                  className="bg-white rounded-lg p-3 border border-orange-200 text-sm"
                                 >
-                                  {cavity.severity.toUpperCase()}
-                                </span>
-                              </div>
-                              <p className="text-gray-600 text-xs">
-                                Position: {cavity.position}
-                              </p>
-                            </div>
-                          ))}
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="font-medium text-gray-800">
+                                      {toothName}
+                                    </span>
+                                    <span
+                                      className={`text-xs font-semibold px-2 py-1 rounded ${
+                                        severity === 'critical'
+                                          ? 'bg-red-200 text-red-900'
+                                          : severity === 'severe'
+                                          ? 'bg-red-100 text-red-800'
+                                          : severity === 'moderate'
+                                          ? 'bg-orange-100 text-orange-800'
+                                          : 'bg-yellow-100 text-yellow-800'
+                                      }`}
+                                    >
+                                      {severity.toUpperCase()}
+                                    </span>
+                                  </div>
+                                  <p className="text-gray-600 text-xs">
+                                    {count} {count === 1 ? 'cavity' : 'cavities'} - Position: {positions}
+                                  </p>
+                                </div>
+                              );
+                            });
+                          })()}
                         </div>
                       </div>
                     )}
@@ -340,6 +432,7 @@ export default function PatientControlPanel({
               )}
             </button>
           </div>
+        </div>
         </div>
       </div>
 

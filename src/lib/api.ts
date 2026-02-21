@@ -26,11 +26,15 @@ export interface Annotation {
   id: string;
   patient_id: string;
   dentist_id: string;
+  created_by: string;
   tooth_number: number;
   annotation_text: string;
   is_public: boolean;
   created_at: string;
   updated_at: string;
+  creator?: {
+    username: string;
+  } | null;
 }
 
 export interface PatientDentalRecord {
@@ -102,6 +106,7 @@ export async function createAnnotation(
     body: JSON.stringify({
       patient_id: patientId,
       dentist_id: finalDentistId,
+      created_by: finalDentistId,
       tooth_number: toothNumber,
       annotation_text: annotationText,
       is_public: isPublic,
@@ -110,10 +115,15 @@ export async function createAnnotation(
 
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.error || 'Failed to create annotation');
+    console.error('API Error Response:', error);
+    const errorMessage = error.details
+      ? `${error.error}: ${error.details} (Code: ${error.code})`
+      : error.error || 'Failed to create annotation';
+    throw new Error(errorMessage);
   }
 
   const data = await response.json();
+  console.log('API Success Response:', data);
   return data.data;
 }
 

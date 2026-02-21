@@ -47,6 +47,48 @@ export default function DentistControlPanel({
   const [cavitySeverity, setCavitySeverity] = useState<'mild' | 'moderate' | 'severe'>('mild');
   const [cavityPosition, setCavityPosition] = useState<'occlusal' | 'buccal' | 'lingual' | 'mesial' | 'distal'>('occlusal');
 
+  // Helper function to get tooth name from tooth number
+  const getToothName = (toothNumber: number): string => {
+    if (toothNumber === 0) return 'General Note';
+
+    const toothMap: Record<number, { name: string; quadrant: string }> = {
+      // Upper Right
+      8: { name: 'Central Incisor', quadrant: 'Upper Right' },
+      7: { name: 'Lateral Incisor', quadrant: 'Upper Right' },
+      6: { name: 'Canine', quadrant: 'Upper Right' },
+      5: { name: 'First Premolar', quadrant: 'Upper Right' },
+      4: { name: 'Second Premolar', quadrant: 'Upper Right' },
+      3: { name: 'First Molar', quadrant: 'Upper Right' },
+      2: { name: 'Second Molar', quadrant: 'Upper Right' },
+      // Upper Left
+      9: { name: 'Central Incisor', quadrant: 'Upper Left' },
+      10: { name: 'Lateral Incisor', quadrant: 'Upper Left' },
+      11: { name: 'Canine', quadrant: 'Upper Left' },
+      12: { name: 'First Premolar', quadrant: 'Upper Left' },
+      13: { name: 'Second Premolar', quadrant: 'Upper Left' },
+      14: { name: 'First Molar', quadrant: 'Upper Left' },
+      15: { name: 'Second Molar', quadrant: 'Upper Left' },
+      // Lower Right
+      25: { name: 'Central Incisor', quadrant: 'Lower Right' },
+      26: { name: 'Lateral Incisor', quadrant: 'Lower Right' },
+      27: { name: 'Canine', quadrant: 'Lower Right' },
+      28: { name: 'First Premolar', quadrant: 'Lower Right' },
+      29: { name: 'Second Premolar', quadrant: 'Lower Right' },
+      30: { name: 'First Molar', quadrant: 'Lower Right' },
+      31: { name: 'Second Molar', quadrant: 'Lower Right' },
+      // Lower Left
+      24: { name: 'Central Incisor', quadrant: 'Lower Left' },
+      23: { name: 'Lateral Incisor', quadrant: 'Lower Left' },
+      22: { name: 'Canine', quadrant: 'Lower Left' },
+      21: { name: 'First Premolar', quadrant: 'Lower Left' },
+      20: { name: 'Second Premolar', quadrant: 'Lower Left' },
+      19: { name: 'First Molar', quadrant: 'Lower Left' },
+      18: { name: 'Second Molar', quadrant: 'Lower Left' },
+    };
+    const tooth = toothMap[toothNumber];
+    return tooth ? `${tooth.name} (${tooth.quadrant})` : `Tooth #${toothNumber}`;
+  };
+
   const loadPatientData = async () => {
     if (!patientId.trim()) {
       setError('Please enter a patient ID');
@@ -159,7 +201,7 @@ export default function DentistControlPanel({
       console.log('Updated record after removing tooth:', updated);
       setCurrentPatient(updated);
       onPatientLoad(updated);
-      setSuccess(`Tooth #${toothNumber} marked as removed`);
+      setSuccess(`${getToothName(toothNumber)} marked as removed`);
       setError('');
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
@@ -178,7 +220,7 @@ export default function DentistControlPanel({
       console.log('Updated record after restoring tooth:', updated);
       setCurrentPatient(updated);
       onPatientLoad(updated);
-      setSuccess(`Tooth #${toothNumber} restored`);
+      setSuccess(`${getToothName(toothNumber)} restored`);
       setError('');
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
@@ -206,7 +248,7 @@ export default function DentistControlPanel({
       console.log('Updated record after adding cavity:', updated);
       setCurrentPatient(updated);
       onPatientLoad(updated);
-      setSuccess(`Cavity added to tooth #${selectedTooth} (${cavitySeverity})`);
+      setSuccess(`Cavity added to ${getToothName(selectedTooth)} (${cavitySeverity})`);
       setError('');
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
@@ -259,32 +301,14 @@ export default function DentistControlPanel({
         Dentist Tools
       </button>
 
-      {/* Sliding Panel */}
+      {/* Fullscreen Panel */}
       <div
-        className={`fixed top-0 right-0 h-full w-[28rem] bg-white shadow-2xl transform transition-transform duration-300 ease-in-out z-40 ${
+        className={`fixed inset-0 bg-white transform transition-transform duration-300 ease-in-out z-40 ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
-        <div className="h-full flex flex-col">
-          {/* Header */}
-          <div className="bg-green-500 text-white p-4 flex items-center justify-between">
-            <h2 className="text-xl font-bold">Dentist Control Panel</h2>
-            <button
-              onClick={onToggle}
-              className="text-white hover:bg-green-600 p-2 rounded-lg transition-colors"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
+        <div className="h-full flex flex-col items-center justify-center">
+          <div className="w-[28rem] h-full max-h-[90vh] flex flex-col">
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {error && (
@@ -343,7 +367,7 @@ export default function DentistControlPanel({
                 {selectedTooth && (
                   <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
                     <h3 className="font-semibold text-purple-800 mb-3">
-                      Tooth #{selectedTooth} Actions
+                      {getToothName(selectedTooth)} Actions
                     </h3>
 
                     <div className="space-y-2">
@@ -409,42 +433,6 @@ export default function DentistControlPanel({
                   </div>
                 )}
 
-                {/* Add Annotation */}
-                <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
-                  <h3 className="font-semibold text-yellow-800 mb-3">
-                    Add Note {selectedTooth && `for Tooth #${selectedTooth}`}
-                  </h3>
-
-                  <div className="space-y-2">
-                    <textarea
-                      value={newAnnotation}
-                      onChange={(e) => setNewAnnotation(e.target.value)}
-                      placeholder="Enter note..."
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-yellow-500 focus:border-transparent text-sm"
-                      rows={3}
-                      disabled={!selectedTooth}
-                    />
-
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={annotationIsPublic}
-                        onChange={(e) => setAnnotationIsPublic(e.target.checked)}
-                        className="rounded text-yellow-500 focus:ring-yellow-500"
-                      />
-                      <span className="text-gray-700">Visible to patient</span>
-                    </label>
-
-                    <button
-                      onClick={handleAddAnnotation}
-                      disabled={!selectedTooth || !newAnnotation.trim()}
-                      className="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-50 text-sm"
-                    >
-                      Add Note
-                    </button>
-                  </div>
-                </div>
-
                 {/* Annotations List */}
                 <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                   <h3 className="font-semibold text-gray-700 mb-3">
@@ -461,8 +449,8 @@ export default function DentistControlPanel({
                           className="bg-white rounded-lg p-3 border border-gray-200"
                         >
                           <div className="flex items-start justify-between mb-2">
-                            <span className="bg-blue-100 text-blue-800 text-xs font-semibold px-2 py-1 rounded">
-                              Tooth #{annotation.tooth_number}
+                            <span className="font-medium text-gray-800 py-1 rounded">
+                              {getToothName(annotation.tooth_number)}
                             </span>
                             <div className="flex items-center gap-1">
                               <button
@@ -474,7 +462,7 @@ export default function DentistControlPanel({
                                 }`}
                                 title={annotation.is_public ? 'Patient can see' : 'Private note'}
                               >
-                                {annotation.is_public ? '👁️ Public' : '🔒 Private'}
+                                {annotation.is_public ? 'Public' : 'Private'}
                               </button>
                               <button
                                 onClick={() => handleDeleteAnnotation(annotation.id)}
@@ -541,6 +529,7 @@ export default function DentistControlPanel({
               )}
             </button>
           </div>
+        </div>
         </div>
       </div>
 
