@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { createServerClient } from '@/lib/supabaseServer';
 
 interface CavityData {
   toothNumber: number;
@@ -22,6 +22,7 @@ interface PatientDentalRecord {
 // GET - Fetch patient dental record
 export async function GET(request: NextRequest) {
   try {
+    const supabase = createServerClient(request);
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {
@@ -92,6 +93,7 @@ export async function GET(request: NextRequest) {
 // POST - Create or update patient dental record (dentist only)
 export async function POST(request: NextRequest) {
   try {
+    const supabase = createServerClient(request);
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {
@@ -216,6 +218,7 @@ export async function POST(request: NextRequest) {
 // Useful for adding/removing individual teeth or cavities without overwriting entire arrays
 export async function PATCH(request: NextRequest) {
   try {
+    const supabase = createServerClient(request);
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {

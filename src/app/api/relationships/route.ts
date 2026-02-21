@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { createServerClient } from '@/lib/supabaseServer';
 
 interface DentistPatientRelationship {
   id?: string;
@@ -12,6 +12,7 @@ interface DentistPatientRelationship {
 // GET - Fetch relationships (dentists see their patients, patients see their dentists)
 export async function GET(request: NextRequest) {
   try {
+    const supabase = createServerClient(request);
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {
@@ -70,6 +71,7 @@ export async function GET(request: NextRequest) {
 // POST - Create new dentist-patient relationship (dentist only)
 export async function POST(request: NextRequest) {
   try {
+    const supabase = createServerClient(request);
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {
@@ -176,6 +178,7 @@ export async function POST(request: NextRequest) {
 // PATCH - Update relationship (toggle active status)
 export async function PATCH(request: NextRequest) {
   try {
+    const supabase = createServerClient(request);
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {
@@ -228,6 +231,7 @@ export async function PATCH(request: NextRequest) {
 // DELETE - Delete relationship (dentist only)
 export async function DELETE(request: NextRequest) {
   try {
+    const supabase = createServerClient(request);
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {

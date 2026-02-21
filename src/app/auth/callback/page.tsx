@@ -33,25 +33,48 @@ export default function AuthCallbackPage() {
         }
       }
 
-      // ✅ Apply role captured during Google signup (if present)
+      // ✅ Apply role captured during Google login/signup (if present)
       const pendingRole = localStorage.getItem("pending_role") as
         | "dentist"
         | "patient"
         | null
+
+      console.log("Pending role from localStorage:", pendingRole)
 
       if (pendingRole) {
         localStorage.removeItem("pending_role")
 
         const user = session.user
 
-        const { error: roleErr } = await supabase
+        // Check if profile exists
+        const { data: existingProfile } = await supabase
           .from("profiles")
-          .update({ role: pendingRole })
+          .select("id, role")
           .eq("id", user.id)
+          .single()
 
-        if (roleErr) {
-          console.error("Role update error:", roleErr.message)
-          // Don't block navigation; user is still signed in.
+        if (existingProfile) {
+          // Update existing profile
+          const { error: updateErr } = await supabase
+            .from("profiles")
+            .update({ role: pendingRole })
+            .eq("id", user.id)
+
+          if (updateErr) {
+            console.error("Role update error:", updateErr.message)
+          }
+        } else {
+          // Create new profile
+          const { error: insertErr } = await supabase
+            .from("profiles")
+            .insert({
+              id: user.id,
+              role: pendingRole,
+            })
+
+          if (insertErr) {
+            console.error("Profile creation error:", insertErr.message)
+          }
         }
       }
 
@@ -62,8 +85,8 @@ export default function AuthCallbackPage() {
   }, [router])
 
   return (
-    <div className="min-h-svh flex items-center justify-center bg-gradient-to-br from-slate-950 via-blue-950 to-slate-900 text-white">
-      <div className="text-blue-100/80">Signing you in…</div>
+    <div className="min-h-svh flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-blue-100">
+      <div className="text-gray-700 text-lg font-medium">Signing you in…</div>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { createServerClient } from '@/lib/supabaseServer';
 
 interface Annotation {
   id?: string;
@@ -15,6 +15,7 @@ interface Annotation {
 // GET - Fetch annotations (dentist sees all their annotations, patient sees only public ones)
 export async function GET(request: NextRequest) {
   try {
+    const supabase = createServerClient(request);
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {
@@ -83,6 +84,7 @@ export async function GET(request: NextRequest) {
 // POST - Create new annotation (dentist only)
 export async function POST(request: NextRequest) {
   try {
+    const supabase = createServerClient(request);
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {
@@ -156,6 +158,7 @@ export async function POST(request: NextRequest) {
 // PUT - Update annotation (dentist only, can only update their own)
 export async function PUT(request: NextRequest) {
   try {
+    const supabase = createServerClient(request);
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {
@@ -217,6 +220,7 @@ export async function PUT(request: NextRequest) {
 // DELETE - Delete annotation (dentist only, can only delete their own)
 export async function DELETE(request: NextRequest) {
   try {
+    const supabase = createServerClient(request);
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user) {

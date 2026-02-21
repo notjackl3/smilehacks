@@ -7,6 +7,10 @@ import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import VoiceCommand from './VoiceCommand';
+import PatientInfoPanel from './PatientInfoPanel';
+import DentistControlPanel from './DentistControlPanel';
+import { supabase } from '@/lib/supabaseClient';
+import { getPatientRecord, type PatientDentalRecord } from '@/lib/api';
 
 interface PartInfo {
   name: string;
@@ -1090,6 +1094,11 @@ export default function JawViewer() {
   const [ctScanData, setCTScanData] = useState<CTScanData | null>(null);
   const controlsRef = useRef<OrbitControlsImpl>(null!);
 
+  // Authentication and role state
+  const [userRole, setUserRole] = useState<'dentist' | 'patient' | null>(null);
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
   const handleVoiceCommand = useCallback((command: VoiceCommandResult) => {
     setLastVoiceCommand(command.rawTranscript || '');
 
@@ -1152,35 +1161,87 @@ export default function JawViewer() {
     setVoiceSelectedNames(new Set());
   }, []);
 
-  // Load CT scan data on mount
+  // Load patient dental record from database
+  const loadPatientDataFromDB = useCallback(async (patientId?: string) => {
+    try {
+      const record = await getPatientRecord(patientId);
+
+      // Convert database record to CT scan format
+      const ctData: CTScanData = {
+        scanId: record.scan_id || 'DB-' + record.id,
+        patientId: record.patient_id,
+        scanDate: record.scan_date,
+        removed: record.removed_teeth,
+        cavity: record.cavities,
+      };
+
+      setCTScanData(ctData);
+
+      // Apply removed teeth
+      const removedTeethNames = new Set<string>();
+      record.removed_teeth.forEach((toothNumber) => {
+        const objName = findObjectNameByToothNumber(toothNumber);
+        if (objName) {
+          removedTeethNames.add(objName);
+        }
+      });
+      setDeletedParts(removedTeethNames);
+
+      // Clear existing manually added cavities since we're loading from DB
+      setCavities([]);
+
+      console.log('Patient data loaded from database:', record);
+    } catch (error) {
+      console.error('Failed to load patient data:', error);
+    }
+  }, []);
+
+  // Handle patient load from dentist panel
+  const handlePatientLoad = useCallback((record: PatientDentalRecord) => {
+    loadPatientDataFromDB(record.patient_id);
+  }, [loadPatientDataFromDB]);
+
+  // Get user authentication and role on mount
   useEffect(() => {
-    const loadCTScanData = async () => {
+    const checkAuth = async () => {
       try {
-        const response = await fetch('/data/mock-ct-scan.json');
-        const data: CTScanData = await response.json();
-        setCTScanData(data);
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-        // Apply removed teeth
-        const removedTeethNames = new Set<string>();
-        data.removed.forEach(toothNumber => {
-          const objName = findObjectNameByToothNumber(toothNumber);
-          if (objName) {
-            removedTeethNames.add(objName);
-          }
-        });
-        setDeletedParts(removedTeethNames);
+        if (authError || !user) {
+          console.error('Not authenticated:', authError);
+          setIsLoading(false);
+          return;
+        }
 
-        // Clear existing manually added cavities since we're loading from CT scan
-        setCavities([]);
+        // Get user's role from profiles table
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single();
 
-        console.log('CT Scan data loaded:', data);
+        if (profileError || !profile) {
+          console.error('Failed to get user profile:', profileError);
+          setIsLoading(false);
+          return;
+        }
+
+        setUserRole(profile.role as 'dentist' | 'patient');
+
+        // If patient, automatically load their data
+        if (profile.role === 'patient') {
+          loadPatientDataFromDB();
+        }
+
+        setIsLoading(false);
       } catch (error) {
-        console.error('Failed to load CT scan data:', error);
+        console.error('Auth check failed:', error);
+        setIsLoading(false);
       }
     };
 
-    loadCTScanData();
-  }, []);
+    checkAuth();
+  }, [loadPatientDataFromDB]);
 
   return (
     <div
@@ -1382,6 +1443,20 @@ export default function JawViewer() {
           maxDistance={20}
         />
       </Canvas>
+
+      {/* Render appropriate panel based on user role */}
+      {!isLoading && userRole === 'patient' && (
+        <PatientInfoPanel isOpen={isPanelOpen} onToggle={() => setIsPanelOpen(!isPanelOpen)} />
+      )}
+
+      {!isLoading && userRole === 'dentist' && (
+        <DentistControlPanel
+          isOpen={isPanelOpen}
+          onToggle={() => setIsPanelOpen(!isPanelOpen)}
+          onPatientLoad={handlePatientLoad}
+          selectedTooth={selectedPart?.toothNumber ?? null}
+        />
+      )}
     </div>
   );
 }
