@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { supabase } from "@/lib/supabaseClient"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -18,13 +19,19 @@ export function LoginForm(props: React.ComponentProps<typeof Card>) {
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setLoading(true)
-
-    // We'll connect to Supabase next.
-    // const form = new FormData(e.currentTarget)
-    // const email = String(form.get("email") || "")
-    // const password = String(form.get("password") || "")
-
+    // We'll wire email/password later if you want.
     setTimeout(() => setLoading(false), 400)
+  }
+
+  async function onGoogleLogin() {
+    const redirectTo = `${window.location.origin}/auth/callback`
+
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo },
+    })
+
+    if (error) console.error("Google sign-in error:", error.message)
   }
 
   return (
@@ -63,18 +70,9 @@ export function LoginForm(props: React.ComponentProps<typeof Card>) {
             </div>
 
             <div className="grid gap-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="password" className="text-blue-100/90">
-                  Password
-                </Label>
-                <a
-                  href="#"
-                  className="text-xs text-blue-200 hover:text-blue-100 underline underline-offset-4"
-                >
-                  Forgot password?
-                </a>
-              </div>
-
+              <Label htmlFor="password" className="text-blue-100/90">
+                Password
+              </Label>
               <Input
                 id="password"
                 name="password"
@@ -98,6 +96,7 @@ export function LoginForm(props: React.ComponentProps<typeof Card>) {
               type="button"
               variant="outline"
               className="w-full border-white/20 bg-white/5 text-white hover:bg-white/10"
+              onClick={onGoogleLogin}
             >
               Continue with Google
             </Button>
