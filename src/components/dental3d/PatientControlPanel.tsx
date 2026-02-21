@@ -194,12 +194,12 @@ export default function PatientControlPanel({
                         : 'bg-blue-500 hover:bg-blue-600 text-white'
                     }`}
                   >
-                    {copied ? '✓ Copied!' : 'Copy'}
+                    {copied ? 'Copied!' : 'Copy'}
                   </button>
                 </div>
               </div>
               <p className="text-xs text-gray-600 mt-3 italic">
-                💡 Your dentist can use this ID to access your dental records and add notes.
+                Your dentist can use this ID to access your dental records and add notes.
               </p>
             </div>
 

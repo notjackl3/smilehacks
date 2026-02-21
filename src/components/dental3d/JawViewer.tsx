@@ -17,6 +17,7 @@ import {
   deleteAnnotation,
   type Annotation as APIAnnotation
 } from '@/lib/api';
+import { supabase } from '@/lib/supabaseClient';
 
 interface PartInfo {
   name: string;
@@ -1846,6 +1847,12 @@ export default function JawViewer() {
   // Get current user from localStorage
   const [currentUser, setCurrentUser] = useState<{ id: string; username: string; role: 'dentist' | 'patient'; name: string } | null>(null);
 
+  // X-ray scan upload state
+  const [uploadedXrayUrl, setUploadedXrayUrl] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [showScanPreview, setShowScanPreview] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     const userStr = localStorage.getItem('current_user');
     if (userStr) {
@@ -1944,6 +1951,209 @@ export default function JawViewer() {
       loadPatientDataFromDB(currentUser.id);
     }
   }, [currentUser, currentPatientId, loadPatientDataFromDB]);
+
+  // Load existing scan preview on patient load
+  useEffect(() => {
+    if (currentPatientId) {
+      // Fetch existing scan from patient_images table
+      const loadExistingScan = async () => {
+        try {
+          const { data, error } = await supabase
+            .from('patient_images')
+            .select('storage_path')
+            .eq('patient_id', currentPatientId)
+            .single();
+
+          if (error) {
+            console.log('No existing scan found:', error.message);
+            setUploadedXrayUrl(null);
+            return;
+          }
+
+          if (data?.storage_path) {
+            // Get public URL for the image
+            const { data: urlData } = supabase
+              .storage
+              .from('xray-images')
+              .getPublicUrl(data.storage_path);
+
+            setUploadedXrayUrl(urlData.publicUrl);
+          }
+        } catch (err) {
+          console.error('Failed to load existing scan:', err);
+        }
+      };
+
+      loadExistingScan();
+    }
+  }, [currentPatientId]);
+
+  // Handle X-ray upload
+  const handleXrayUpload = useCallback(async (file: File) => {
+    if (!currentPatientId || !currentUser) {
+      alert('Please select a patient first');
+      return;
+    }
+
+    setIsUploading(true);
+
+    try {
+      // 1. Upload to Supabase storage
+      const ext = file.name.split('.').pop() || 'png';
+      const path = `patient/${currentPatientId}/${crypto.randomUUID()}.${ext}`;
+
+      const { error: uploadErr } = await supabase
+        .storage
+        .from('xray-images')
+        .upload(path, file, { contentType: file.type });
+
+      if (uploadErr) throw uploadErr;
+
+      // 2. Delete existing scan for this patient (if any)
+      await supabase
+        .from('patient_images')
+        .delete()
+        .eq('patient_id', currentPatientId);
+
+      // 3. Insert new metadata row
+      const { error: insertErr } = await supabase
+        .from('patient_images')
+        .insert({
+          patient_id: currentPatientId,
+          uploaded_by: currentUser.id,
+          storage_path: path,
+        });
+
+      if (insertErr) throw insertErr;
+
+      // 4. Get public URL for preview
+      const { data: urlData } = supabase
+        .storage
+        .from('xray-images')
+        .getPublicUrl(path);
+
+      setUploadedXrayUrl(urlData.publicUrl);
+
+      // 5. Send to AI for analysis
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('patientId', currentPatientId);
+
+      const res = await fetch('/api/analyze-xray', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`AI analysis failed (${res.status}): ${text}`);
+      }
+
+      const analysis = await res.json();
+      console.log('=== AI ANALYSIS RESULT ===');
+      console.log('Present teeth:', analysis.present);
+      console.log('Removed teeth (tooth numbers):', analysis.removed);
+
+      // 6. Update the 3D viewer with removed teeth
+      const removedTeethNames = new Set<string>();
+      analysis.removed.forEach((toothNumber: number) => {
+        const objName = findObjectNameByToothNumber(toothNumber);
+        console.log(`Mapping tooth #${toothNumber} -> ${objName}`);
+        if (objName) {
+          removedTeethNames.add(objName);
+        } else {
+          console.warn(`⚠️ No object name found for tooth #${toothNumber}`);
+        }
+      });
+
+      console.log('Removed teeth object names:', Array.from(removedTeethNames));
+      setDeletedParts(removedTeethNames);
+
+      // 7. Reload patient data to sync with database
+      await loadPatientDataFromDB(currentPatientId);
+
+      console.log('X-ray upload and analysis complete');
+    } catch (err: any) {
+      console.error('X-ray upload error:', err);
+      alert(`Upload failed: ${err.message}`);
+    } finally {
+      setIsUploading(false);
+    }
+  }, [currentPatientId, currentUser, loadPatientDataFromDB]);
+
+  // Handle file input change
+  const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleXrayUpload(file);
+    }
+    // Reset input so same file can be selected again
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, [handleXrayUpload]);
+
+  // Handle scan removal
+  const handleRemoveScan = useCallback(async () => {
+    if (!currentPatientId || !currentUser) {
+      alert('No patient selected');
+      return;
+    }
+
+    if (!confirm('Are you sure you want to remove this scan? This will also restore all teeth.')) {
+      return;
+    }
+
+    setIsUploading(true);
+
+    try {
+      // 1. Get the storage path from patient_images
+      const { data: imageData, error: fetchErr } = await supabase
+        .from('patient_images')
+        .select('storage_path')
+        .eq('patient_id', currentPatientId)
+        .single();
+
+      if (fetchErr && fetchErr.code !== 'PGRST116') {
+        console.error('Error fetching image data:', fetchErr);
+      }
+
+      // 2. Delete from storage if exists
+      if (imageData?.storage_path) {
+        const { error: storageErr } = await supabase
+          .storage
+          .from('xray-images')
+          .remove([imageData.storage_path]);
+
+        if (storageErr) {
+          console.error('Error deleting from storage:', storageErr);
+        }
+      }
+
+      // 3. Delete from patient_images table
+      await supabase
+        .from('patient_images')
+        .delete()
+        .eq('patient_id', currentPatientId);
+
+      // 4. Reset removed teeth in patient_dental_records
+      await supabase
+        .from('patient_dental_records')
+        .update({ removed_teeth: [] })
+        .eq('patient_id', currentPatientId);
+
+      // 5. Reset local state
+      setUploadedXrayUrl(null);
+      setDeletedParts(new Set());
+
+      console.log('Scan removed successfully');
+    } catch (err: any) {
+      console.error('Error removing scan:', err);
+      alert(`Failed to remove scan: ${err.message}`);
+    } finally {
+      setIsUploading(false);
+    }
+  }, [currentPatientId, currentUser]);
 
   const handleVoiceCommand = useCallback((command: VoiceCommandResult) => {
     setLastVoiceCommand(command.rawTranscript || '');
@@ -2344,7 +2554,7 @@ export default function JawViewer() {
         <p className="text-sm text-gray-500">3D Dental Model Viewer</p>
         {ctScanData && (
           <div className="mt-2 pt-2 border-t border-gray-200">
-            <p className="text-xs text-green-600 font-medium">📊 CT Scan Loaded</p>
+            <p className="text-xs text-green-600 font-medium">CT Scan Loaded</p>
             <p className="text-xs text-gray-500">Scan ID: {ctScanData.scanId}</p>
             <p className="text-xs text-gray-500">Date: {ctScanData.scanDate}</p>
             <p className="text-xs text-gray-500">Removed: {ctScanData.removed.length} teeth</p>
@@ -2398,6 +2608,58 @@ export default function JawViewer() {
 
       {/* Bottom right toolbar */}
       <div className="absolute right-4 bottom-4 z-10 bg-white/95 backdrop-blur-sm rounded-lg border border-gray-200 shadow-sm px-2 py-2 flex items-center gap-2">
+        {/* X-ray Upload Button - Only show for dentists with patient selected */}
+        {currentUser?.role === 'dentist' && currentPatientId && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleFileInputChange}
+            />
+            {uploadedXrayUrl ? (
+              <>
+                <button
+                  onClick={() => setShowScanPreview(!showScanPreview)}
+                  className={`p-3 rounded-lg font-medium transition-colors flex items-center justify-center ${
+                    showScanPreview
+                      ? 'bg-gray-500 text-white hover:bg-gray-600'
+                      : 'bg-green-500 text-white hover:bg-green-600'
+                  }`}
+                  title="Toggle X-ray Scan Preview"
+                >
+                  <span className="text-lg">{showScanPreview ? 'Hide Scan' : 'View Scan'}</span>
+                </button>
+                <button
+                  onClick={handleRemoveScan}
+                  disabled={isUploading}
+                  className={`p-3 rounded-lg font-medium transition-colors flex items-center justify-center ${
+                    isUploading
+                      ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                      : 'bg-red-500 text-white hover:bg-red-600'
+                  }`}
+                  title="Remove Scan"
+                >
+                  <span className="text-lg">Remove</span>
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+                className={`p-3 rounded-lg font-medium transition-colors flex items-center justify-center ${
+                  isUploading
+                    ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                    : 'bg-blue-500 text-white hover:bg-blue-600'
+                }`}
+                title={isUploading ? 'Uploading...' : 'Upload X-ray Scan'}
+              >
+                <span className="text-lg">{isUploading ? '⏳ Uploading...' : 'Upload Scan'}</span>
+              </button>
+            )}
+          </>
+        )}
         <button
           onClick={() => setShowAllAnnotations(!showAllAnnotations)}
           className={`p-3 rounded-lg font-medium transition-colors flex items-center justify-center ${
@@ -2629,6 +2891,34 @@ export default function JawViewer() {
           onPatientLoad={handlePatientLoad}
         />
       ) : null}
+
+      {/* X-ray Scan Preview Panel */}
+      {showScanPreview && uploadedXrayUrl && (
+        <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-gray-300 shadow-2xl z-50 transition-all duration-300">
+          <div className="max-w-7xl mx-auto p-4">
+            <div className="flex items-start justify-between mb-2">
+              <h3 className="text-lg font-semibold text-gray-800">X-ray Scan Preview</h3>
+              <button
+                onClick={() => setShowScanPreview(false)}
+                className="text-gray-500 hover:text-gray-700 transition-colors p-1 rounded hover:bg-gray-100"
+                title="Close Preview"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="bg-gray-100 rounded-lg p-2 max-h-96 overflow-auto">
+              <img
+                src={uploadedXrayUrl}
+                alt="X-ray Scan"
+                className="max-w-full h-auto mx-auto rounded shadow-lg"
+                style={{ maxHeight: '350px' }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
