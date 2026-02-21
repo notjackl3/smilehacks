@@ -240,17 +240,44 @@ export default function PatientControlPanel({
                       </div>
                     </div>
 
-                    {/* Notes from Dentist */}
-                    <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
-                      <h3 className="font-semibold text-yellow-800 mb-3 flex items-center gap-2">
-                        Notes from Your Dentist ({annotations.length})
+                    {/* General Notes from Dentist */}
+                    <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                      <h3 className="font-semibold text-blue-800 mb-3 flex items-center gap-2">
+                        General Notes ({annotations.filter(a => a.tooth_number === 0).length})
                       </h3>
 
-                      {annotations.length === 0 ? (
-                        <p className="text-gray-500 text-sm italic">No notes yet</p>
+                      {annotations.filter(a => a.tooth_number === 0).length === 0 ? (
+                        <p className="text-gray-500 text-sm italic">No general notes yet</p>
+                      ) : (
+                        <div className="space-y-2 max-h-64 overflow-y-auto">
+                          {annotations.filter(a => a.tooth_number === 0).map((annotation) => (
+                            <div
+                              key={annotation.id}
+                              className="bg-white rounded-lg p-3 border border-blue-200"
+                            >
+                              <div className="flex items-start justify-between mb-2">
+                                <span className="text-xs text-gray-500">
+                                  {new Date(annotation.created_at).toLocaleDateString()}
+                                </span>
+                              </div>
+                              <p className="text-sm text-gray-700">{annotation.annotation_text}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Tooth-Specific Notes from Dentist */}
+                    <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
+                      <h3 className="font-semibold text-yellow-800 mb-3 flex items-center gap-2">
+                        Tooth-Specific Notes ({annotations.filter(a => a.tooth_number !== 0).length})
+                      </h3>
+
+                      {annotations.filter(a => a.tooth_number !== 0).length === 0 ? (
+                        <p className="text-gray-500 text-sm italic">No tooth-specific notes yet</p>
                       ) : (
                         <div className="space-y-2 max-h-80 overflow-y-auto">
-                          {annotations.map((annotation) => (
+                          {annotations.filter(a => a.tooth_number !== 0).map((annotation) => (
                             <div
                               key={annotation.id}
                               className="bg-white rounded-lg p-3 border border-yellow-200"

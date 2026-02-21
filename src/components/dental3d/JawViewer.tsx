@@ -1851,7 +1851,20 @@ export default function JawViewer() {
   const [uploadedXrayUrl, setUploadedXrayUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [showScanPreview, setShowScanPreview] = useState(false);
+  const [showNotesSidebar, setShowNotesSidebar] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Helper function to format annotation display name
+  const getAnnotationDisplayName = (annotation: Annotation): string => {
+    if (annotation.toothNumber === null || annotation.toothNumber === 0) {
+      return 'General Note';
+    }
+    if (annotation.toothName) {
+      const info = getToothInfo(annotation.toothName);
+      return info.quadrant ? `${info.displayName} (${info.quadrant})` : info.displayName;
+    }
+    return `Tooth #${annotation.toothNumber}`;
+  };
 
   useEffect(() => {
     const userStr = localStorage.getItem('current_user');
@@ -2550,7 +2563,7 @@ export default function JawViewer() {
       }}
     >
       <div className="absolute top-4 left-4 z-10 bg-white/90 backdrop-blur-sm rounded-lg px-4 py-2 shadow-sm border border-gray-200">
-        <h1 className="text-xl font-bold text-gray-800">DentalVision</h1>
+        <h1 className="text-xl font-bold text-gray-800">StarTooth</h1>
         <p className="text-sm text-gray-500">3D Dental Model Viewer</p>
         {ctScanData && (
           <div className="mt-2 pt-2 border-t border-gray-200">
@@ -2891,6 +2904,90 @@ export default function JawViewer() {
           onPatientLoad={handlePatientLoad}
         />
       ) : null}
+
+      {/* Notes Sidebar */}
+      {showNotesSidebar && (
+        <div className="fixed left-0 top-0 bottom-0 w-80 bg-white border-r-2 border-gray-300 shadow-xl z-40 transition-all duration-300 overflow-hidden flex flex-col">
+          <div className="p-4 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-blue-50 to-purple-50">
+            <h3 className="text-lg font-bold text-gray-800">All Notes</h3>
+            <button
+              onClick={() => setShowNotesSidebar(false)}
+              className="text-gray-500 hover:text-gray-700 transition-colors p-1 rounded hover:bg-gray-100"
+              title="Close Sidebar"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4">
+            {annotations.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-gray-500 italic">No notes available</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {annotations.map((annotation) => (
+                  <div
+                    key={annotation.id}
+                    className={`rounded-lg p-3 border-2 transition-all hover:shadow-md ${
+                      annotation.toothNumber === 0
+                        ? 'bg-blue-50 border-blue-200'
+                        : 'bg-white border-gray-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex-1">
+                        <h4 className="font-semibold text-sm text-gray-800">
+                          {getAnnotationDisplayName(annotation)}
+                        </h4>
+                        <p className="text-xs text-gray-500 mt-1">
+                          By {annotation.createdBy} • {annotation.createdAt.toLocaleDateString()}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleRemoveAnnotation(annotation.id)}
+                        className="ml-2 text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 transition-colors flex-shrink-0"
+                        title="Delete Note"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                    <p className="text-sm text-gray-700 leading-relaxed">{annotation.text}</p>
+                    {annotation.isPublic && (
+                      <span className="inline-block mt-2 text-xs px-2 py-1 bg-green-100 text-green-800 rounded">
+                        Public
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="p-3 border-t border-gray-200 bg-gray-50">
+            <p className="text-xs text-gray-600 text-center">
+              {annotations.length} {annotations.length === 1 ? 'note' : 'notes'} total
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Toggle Notes Sidebar Button */}
+      {!showNotesSidebar && (
+        <button
+          onClick={() => setShowNotesSidebar(true)}
+          className="fixed left-0 top-1/2 -translate-y-1/2 bg-blue-500 hover:bg-blue-600 text-white px-2 py-4 rounded-r-lg shadow-lg transition-colors z-40"
+          title="Show Notes"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+      )}
 
       {/* X-ray Scan Preview Panel */}
       {showScanPreview && uploadedXrayUrl && (

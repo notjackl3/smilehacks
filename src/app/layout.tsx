@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "DentalVision",
+  title: "StarTooth",
   description: "AI-powered dental X-ray analysis with 3D visualization",
 };
 

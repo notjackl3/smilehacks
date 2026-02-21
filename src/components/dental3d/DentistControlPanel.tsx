@@ -433,17 +433,76 @@ export default function DentistControlPanel({
                   </div>
                 )}
 
-                {/* Annotations List */}
-                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                  <h3 className="font-semibold text-gray-700 mb-3">
-                    Notes ({annotations.length})
+                {/* General Notes Section */}
+                <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+                  <h3 className="font-semibold text-blue-800 mb-3">
+                    General Notes ({annotations.filter(a => a.tooth_number === 0).length})
                   </h3>
 
-                  {annotations.length === 0 ? (
-                    <p className="text-gray-500 text-sm italic">No notes yet</p>
+                  {annotations.filter(a => a.tooth_number === 0).length === 0 ? (
+                    <p className="text-gray-500 text-sm italic">No general notes yet</p>
+                  ) : (
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {annotations.filter(a => a.tooth_number === 0).map((annotation) => (
+                        <div
+                          key={annotation.id}
+                          className="bg-white rounded-lg p-3 border border-blue-200"
+                        >
+                          <div className="flex items-start justify-between mb-2">
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => handleToggleAnnotationVisibility(annotation)}
+                                className={`text-xs px-2 py-1 rounded ${
+                                  annotation.is_public
+                                    ? 'bg-green-100 text-green-800'
+                                    : 'bg-gray-100 text-gray-600'
+                                }`}
+                                title={annotation.is_public ? 'Patient can see' : 'Private note'}
+                              >
+                                {annotation.is_public ? 'Public' : 'Private'}
+                              </button>
+                              <button
+                                onClick={() => handleDeleteAnnotation(annotation.id)}
+                                className="text-red-500 hover:text-red-700 p-1"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  className="h-4 w-4"
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                  stroke="currentColor"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                  />
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-sm text-gray-700">{annotation.annotation_text}</p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {new Date(annotation.created_at).toLocaleString()}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Tooth-Specific Notes Section */}
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <h3 className="font-semibold text-gray-700 mb-3">
+                    Tooth-Specific Notes ({annotations.filter(a => a.tooth_number !== 0).length})
+                  </h3>
+
+                  {annotations.filter(a => a.tooth_number !== 0).length === 0 ? (
+                    <p className="text-gray-500 text-sm italic">No tooth-specific notes yet</p>
                   ) : (
                     <div className="space-y-2 max-h-64 overflow-y-auto">
-                      {annotations.map((annotation) => (
+                      {annotations.filter(a => a.tooth_number !== 0).map((annotation) => (
                         <div
                           key={annotation.id}
                           className="bg-white rounded-lg p-3 border border-gray-200"
