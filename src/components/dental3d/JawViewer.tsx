@@ -5,6 +5,7 @@ import { OrbitControls, Center } from '@react-three/drei';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import VoiceCommand from './VoiceCommand';
 
 interface PartInfo {
@@ -721,7 +722,7 @@ function JawModel({
   useEffect(() => {
     const loader = new OBJLoader();
     loader.load(
-      '/models/theREALmodel.obj',
+      '/models/jaw-blender.obj',
       (obj) => {
         const box = new THREE.Box3().setFromObject(obj);
         const size = box.getSize(new THREE.Vector3());
@@ -761,7 +762,7 @@ function JawModel({
         });
 
         setModel(obj);
-        console.log("TOTAL meshes:", meshCount);
+        console.log("TOTAL meshes:", allMeshes.current.length);
       },
       undefined,
       (error) => {
@@ -912,7 +913,7 @@ export default function JawViewer() {
   const [lastVoiceCommand, setLastVoiceCommand] = useState<string>('');
   const [focusMode, setFocusMode] = useState(false);
   const [chewingMode, setChewingMode] = useState(false);
-  const controlsRef = useRef<{ target: THREE.Vector3; update: () => void } | null>(null);
+  const controlsRef = useRef<OrbitControlsImpl>(null!);
 
   const handleVoiceCommand = useCallback((command: VoiceCommandResult) => {
     setLastVoiceCommand(command.rawTranscript || '');
@@ -1158,7 +1159,7 @@ export default function JawViewer() {
         </Center>
 
         <OrbitControls
-          ref={controlsRef as React.RefObject<any>}
+          ref={controlsRef}
           enablePan={true}
           enableZoom={true}
           enableRotate={true}
