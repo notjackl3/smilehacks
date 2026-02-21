@@ -721,7 +721,7 @@ function JawModel({
   useEffect(() => {
     const loader = new OBJLoader();
     loader.load(
-      '/models/jaw-blender.obj',
+      '/models/theREALmodel.obj',
       (obj) => {
         const box = new THREE.Box3().setFromObject(obj);
         const size = box.getSize(new THREE.Vector3());
@@ -761,6 +761,7 @@ function JawModel({
         });
 
         setModel(obj);
+        console.log("TOTAL meshes:", meshCount);
       },
       undefined,
       (error) => {
