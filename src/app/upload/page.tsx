@@ -37,11 +37,15 @@ export default function UploadPage() {
     setImagePreview(previewUrl);
   }
 
-  async function handleGenerate() {
-    if (!file) return;
+async function handleGenerate() {
+  if (!file) return
 
-    setUploading(true);
-    setErrorMsg(null);
+  setUploading(true)
+  setErrorMsg(null)
+
+  try {
+    const formData = new FormData()
+    formData.append("file", file)
 
     try {
       await new Promise<void>((resolve, reject) => {
@@ -64,8 +68,35 @@ export default function UploadPage() {
       setErrorMsg(err?.message ?? "Upload failed.");
     } finally {
       setUploading(false);
+    const res = await fetch("/api/analyze-xray", {
+      method: "POST",
+      body: formData,
+    })
+
+    if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`AI analysis failed (${res.status}): ${text}`)
     }
+
+    const analysis = await res.json()
+
+    // Create downloadable analysis.json
+    const blob = new Blob([JSON.stringify(analysis, null, 2)], {
+      type: "application/json",
+    })
+
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = "analysis.json"
+    a.click()
+
+  } catch (err: any) {
+    setErrorMsg(err?.message ?? "Analysis failed.")
+  } finally {
+    setUploading(false)
   }
+}
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
