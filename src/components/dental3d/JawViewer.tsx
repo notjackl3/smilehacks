@@ -153,6 +153,7 @@ interface Cavity {
   position: THREE.Vector3;
   normal: THREE.Vector3;
   size: number;
+  cavityPosition?: 'occlusal' | 'buccal' | 'lingual' | 'mesial' | 'distal'; // Track which surface the cavity is on
 }
 
 interface CavityPreviewData {
@@ -198,6 +199,19 @@ function CavityMarker({ cavity, isPreview = false }: { cavity: Cavity; isPreview
   );
 }
 
+interface CavityMenuData {
+  toothInfo: PartInfo;
+  position: { x: number; y: number };
+}
+
+interface JawModelRef {
+  placeCavityOnTooth: (
+    toothName: string,
+    cavityPosition: 'occlusal' | 'buccal' | 'lingual' | 'mesial' | 'distal',
+    existingCavityCount: number
+  ) => void;
+}
+
 interface JawModelProps {
   onHover: (info: PartInfo | null) => void;
   onSelect: (info: PartInfo | null) => void;
@@ -212,6 +226,8 @@ interface JawModelProps {
   chewingMode: boolean;
   controlsRef: React.RefObject<{ target: THREE.Vector3; update: () => void } | null>;
   ctScanCavities?: CTScanData['cavity'];
+  onShowCavityMenu: (data: CavityMenuData | null) => void;
+  jawModelRef?: React.RefObject<JawModelRef | null>;
 }
 
 function JawModel({
@@ -228,6 +244,8 @@ function JawModel({
   chewingMode,
   controlsRef,
   ctScanCavities = [],
+  onShowCavityMenu,
+  jawModelRef,
 }: JawModelProps) {
   const [model, setModel] = useState<THREE.Group | null>(null);
   const [cavityPreview, setCavityPreview] = useState<CavityPreviewData | null>(null);
@@ -351,19 +369,12 @@ function JawModel({
         const mesh = intersection.object as THREE.Mesh;
         const info = getMeshInfo(mesh);
 
-        // Cavity mode - add cavity on tooth
+        // Cavity mode - show position menu for tooth
         if (cavityMode && info.type === 'tooth') {
-          const faceNormal = intersection.face?.normal.clone() || new THREE.Vector3(0, 1, 0);
-          faceNormal.transformDirection(mesh.matrixWorld);
-
-          const cavity: Cavity = {
-            id: `cavity_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
-            toothName: info.name,
-            position: intersection.point.clone(),
-            normal: faceNormal,
-            size: 0.03 + Math.random() * 0.02,
-          };
-          onAddCavity(cavity);
+          onShowCavityMenu({
+            toothInfo: info,
+            position: { x: event.clientX, y: event.clientY },
+          });
           return;
         }
 
@@ -386,7 +397,7 @@ function JawModel({
         onClickEmpty();
       }
     },
-    [model, camera, gl, onSelect, selectedMeshId, getMeshInfo, cavityMode, onAddCavity, setMeshHighlight, onClickEmpty, focusMode]
+    [model, camera, gl, onSelect, selectedMeshId, getMeshInfo, cavityMode, onShowCavityMenu, setMeshHighlight, onClickEmpty, focusMode]
   );
 
   const handlePointerLeave = useCallback(() => {
@@ -791,10 +802,125 @@ function JawModel({
     );
   }, []);
 
+  // Helper function to place a cavity at a specific position on a tooth
+  const placeCavityOnTooth = useCallback((
+    toothName: string,
+    cavityPosition: 'occlusal' | 'buccal' | 'lingual' | 'mesial' | 'distal',
+    existingCavityCount: number = 0
+  ) => {
+    if (!model) return;
+
+    const mesh = allMeshes.current.find(m => meshNames.current.get(m.id) === toothName);
+    if (!mesh || !mesh.geometry) {
+      console.warn(`Could not find mesh for tooth: ${toothName}`);
+      return;
+    }
+
+    // Ensure mesh transforms are up to date
+    mesh.updateMatrixWorld(true);
+
+    // Get bounding box of the tooth
+    const boundingBox = new THREE.Box3().setFromObject(mesh);
+    const center = boundingBox.getCenter(new THREE.Vector3());
+    const size = boundingBox.getSize(new THREE.Vector3());
+
+    // Get direction based on cavity position
+    const direction = getDirectionVector(cavityPosition).normalize();
+
+    // Find the best surface point
+    let cavityWorldPosition: THREE.Vector3;
+    let cavityWorldNormal: THREE.Vector3;
+
+    const positionAttribute = mesh.geometry.getAttribute('position');
+    const normalAttribute = mesh.geometry.getAttribute('normal');
+
+    if (positionAttribute && normalAttribute) {
+      // Find vertices that match the desired direction
+      let bestVertex: THREE.Vector3 | null = null;
+      let bestNormal: THREE.Vector3 | null = null;
+      let bestScore = -Infinity;
+
+      const vertex = new THREE.Vector3();
+      const normal = new THREE.Vector3();
+      const worldVertex = new THREE.Vector3();
+      const worldNormal = new THREE.Vector3();
+
+      // Sample vertices to find the best match
+      const sampleCount = Math.min(positionAttribute.count, 100);
+      const step = Math.floor(positionAttribute.count / sampleCount);
+
+      for (let i = 0; i < positionAttribute.count; i += step) {
+        vertex.fromBufferAttribute(positionAttribute, i);
+        normal.fromBufferAttribute(normalAttribute, i);
+
+        // Transform to world space
+        worldVertex.copy(vertex).applyMatrix4(mesh.matrixWorld);
+        worldNormal.copy(normal).transformDirection(mesh.matrixWorld).normalize();
+
+        // Calculate direction from center to this vertex
+        const vertexDir = worldVertex.clone().sub(center).normalize();
+
+        // Score based on alignment with desired direction
+        const directionScore = vertexDir.dot(direction);
+        const normalScore = worldNormal.dot(direction);
+
+        const totalScore = directionScore * 0.7 + normalScore * 0.3;
+
+        if (totalScore > bestScore) {
+          bestScore = totalScore;
+          bestVertex = worldVertex.clone();
+          bestNormal = worldNormal.clone();
+        }
+      }
+
+      if (bestVertex && bestNormal) {
+        cavityWorldPosition = bestVertex;
+        cavityWorldNormal = bestNormal;
+      } else {
+        // Fallback
+        cavityWorldPosition = center.clone().add(direction.clone().multiplyScalar(Math.max(size.x, size.y, size.z) * 0.4));
+        cavityWorldNormal = direction;
+      }
+    } else {
+      // Fallback if no geometry attributes
+      cavityWorldPosition = center.clone().add(direction.clone().multiplyScalar(Math.max(size.x, size.y, size.z) * 0.4));
+      cavityWorldNormal = direction;
+    }
+
+    // Calculate size - increases with multiple cavities at same position
+    const baseSize = 0.035;
+    const sizeIncrement = 0.015;
+    const cavitySize = baseSize + (existingCavityCount * sizeIncrement);
+
+    // Create the cavity
+    const cavity: Cavity = {
+      id: `cavity_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
+      toothName: toothName,
+      position: cavityWorldPosition,
+      normal: cavityWorldNormal.normalize(),
+      size: cavitySize,
+      cavityPosition: cavityPosition,
+    };
+
+    onAddCavity(cavity);
+  }, [model, onAddCavity]);
+
+  // Expose cavity placement function to parent via ref
+  useEffect(() => {
+    if (jawModelRef) {
+      jawModelRef.current = {
+        placeCavityOnTooth,
+      };
+    }
+  }, [jawModelRef, placeCavityOnTooth]);
+
   // Generate cavities from CT scan data once model is loaded
   useEffect(() => {
-    // Only generate once
-    if (!model || ctScanCavities.length === 0 || ctCavitiesGenerated.current) return;
+    // Reset generation flag when CT scan data changes
+    ctCavitiesGenerated.current = false;
+
+    // Only generate if we have model and cavity data
+    if (!model || ctScanCavities.length === 0) return;
 
     console.log('Starting cavity generation for', ctScanCavities.length, 'cavities');
 
@@ -921,18 +1047,19 @@ function JawModel({
         position: cavityPosition,
         normal: cavityNormal.normalize(),
         size: getSizeFromSeverity(cavityData.severity),
+        cavityPosition: cavityData.position,
       };
 
       generatedCavities.push(cavity);
     });
 
-    // Mark as generated before adding cavities to prevent re-triggering
-    ctCavitiesGenerated.current = true;
-
     // Add all generated cavities at once
     generatedCavities.forEach(cavity => onAddCavity(cavity));
 
     console.log(`Generated ${generatedCavities.length} cavities from CT scan data`);
+
+    // Mark as generated after adding cavities
+    ctCavitiesGenerated.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, ctScanCavities]);
 
@@ -944,6 +1071,8 @@ function JawModel({
       </mesh>
     );
   }
+
+  console.log('JawModel rendering with cavities:', cavities.length, cavities);
 
   return (
     <group>
@@ -1080,6 +1209,78 @@ interface CTScanData {
   }[];
 }
 
+// Helper to get direction vector based on cavity position
+const getDirectionVector = (position: 'occlusal' | 'buccal' | 'lingual' | 'mesial' | 'distal'): THREE.Vector3 => {
+  switch (position) {
+    case 'occlusal': return new THREE.Vector3(0, 1, 0); // Top surface
+    case 'buccal': return new THREE.Vector3(1, 0, 0); // Outer surface (cheek side)
+    case 'lingual': return new THREE.Vector3(-1, 0, 0); // Inner surface (tongue side)
+    case 'mesial': return new THREE.Vector3(0, 0, 1); // Front surface
+    case 'distal': return new THREE.Vector3(0, 0, -1); // Back surface
+    default: return new THREE.Vector3(0, 1, 0);
+  }
+};
+
+// Cavity Position Menu Component
+function CavityPositionMenu({
+  menuData,
+  onSelect,
+  onClose,
+}: {
+  menuData: CavityMenuData;
+  onSelect: (position: 'occlusal' | 'buccal' | 'lingual' | 'mesial' | 'distal') => void;
+  onClose: () => void;
+}) {
+  const positions: Array<{ value: 'occlusal' | 'buccal' | 'lingual' | 'mesial' | 'distal'; label: string; description: string }> = [
+    { value: 'occlusal', label: 'Occlusal', description: 'Top chewing surface' },
+    { value: 'buccal', label: 'Buccal', description: 'Outer (cheek side)' },
+    { value: 'lingual', label: 'Lingual', description: 'Inner (tongue side)' },
+    { value: 'mesial', label: 'Mesial', description: 'Front surface' },
+    { value: 'distal', label: 'Distal', description: 'Back surface' },
+  ];
+
+  return (
+    <>
+      {/* Backdrop to close menu */}
+      <div
+        className="fixed inset-0 z-40"
+        onClick={onClose}
+      />
+
+      {/* Menu */}
+      <div
+        className="fixed z-50 bg-white rounded-lg shadow-xl border-2 border-gray-300 py-2 min-w-[240px]"
+        style={{
+          left: `${menuData.position.x}px`,
+          top: `${menuData.position.y}px`,
+        }}
+      >
+        <div className="px-3 py-2 border-b border-gray-200 bg-gray-50">
+          <p className="text-sm font-semibold text-gray-700">
+            Add Cavity to {menuData.toothInfo.displayName}
+          </p>
+          <p className="text-xs text-gray-500">Select position:</p>
+        </div>
+        <div className="py-1">
+          {positions.map((pos) => (
+            <button
+              key={pos.value}
+              onClick={() => {
+                onSelect(pos.value);
+                onClose();
+              }}
+              className="w-full px-4 py-2 text-left hover:bg-blue-50 transition-colors flex flex-col"
+            >
+              <span className="text-sm font-medium text-gray-800">{pos.label}</span>
+              <span className="text-xs text-gray-500">{pos.description}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
 export default function JawViewer() {
   const [hoveredPart, setHoveredPart] = useState<PartInfo | null>(null);
   const [selectedPart, setSelectedPart] = useState<PartInfo | null>(null);
@@ -1092,6 +1293,8 @@ export default function JawViewer() {
   const [chewingMode, setChewingMode] = useState(false);
   const [ctScanData, setCTScanData] = useState<CTScanData | null>(null);
   const controlsRef = useRef<OrbitControlsImpl>(null!);
+  const [cavityMenuData, setCavityMenuData] = useState<CavityMenuData | null>(null);
+  const jawModelRef = useRef<JawModelRef | null>(null);
 
   const [isPanelOpen, setIsPanelOpen] = useState(false);
   const [currentPatientId, setCurrentPatientId] = useState<string | null>(null);
@@ -1190,40 +1393,55 @@ export default function JawViewer() {
     setSelectedPart(null);
   };
 
-  const handleAddCavity = async (cavity: Cavity) => {
-    // Get tooth number from the cavity
-    const toothInfo = Object.entries(TOOTH_MAP).find(([key]) => key === cavity.toothName)?.[1];
-    if (!toothInfo || 'isGum' in toothInfo) {
-      // Can't add cavity to gums, only update local state
-      setCavities(prev => [...prev, cavity]);
-      return;
+  // Handle cavity position selection from menu
+  const handleCavityPositionSelect = useCallback(async (
+    toothInfo: PartInfo,
+    position: 'occlusal' | 'buccal' | 'lingual' | 'mesial' | 'distal'
+  ) => {
+    const objName = toothInfo.name;
+
+    // Get tooth info
+    const toothMapInfo = Object.entries(TOOTH_MAP).find(([key]) => key === objName)?.[1];
+    if (!toothMapInfo || 'isGum' in toothMapInfo) return;
+
+    const toothNumber = toothMapInfo.toothNumber;
+
+    // Check if there are existing cavities at this position on this tooth
+    const existingCavitiesAtPosition = cavities.filter(
+      c => c.toothName === objName && c.cavityPosition === position
+    );
+
+    // Use the jawModelRef to place the cavity at the correct position
+    if (jawModelRef.current) {
+      jawModelRef.current.placeCavityOnTooth(objName, position, existingCavitiesAtPosition.length);
     }
 
-    const toothNumber = toothInfo.toothNumber;
-
-    // If we have a patient ID and user is a dentist, save to database
+    // Save to database if applicable
     if (currentPatientId && currentUser?.role === 'dentist') {
       try {
         const { addCavity: addCavityAPI } = await import('@/lib/api');
-
-        // Determine severity and position (we'll use defaults since manual clicks don't specify these)
         const cavityData = {
           toothNumber,
           severity: 'moderate' as const,
-          position: 'occlusal' as const,
+          position: position,
         };
-
-        console.log('Manually adding cavity:', cavityData, 'for patient:', currentPatientId);
+        console.log('Adding cavity:', cavityData, 'for patient:', currentPatientId);
         await addCavityAPI(currentPatientId, cavityData);
         console.log('Cavity saved to database');
       } catch (error) {
         console.error('Failed to save cavity to database:', error);
-        // Continue with local state update even if API fails
       }
     }
+  }, [cavities, currentPatientId, currentUser]);
 
+  const handleAddCavity = async (cavity: Cavity) => {
+    console.log('Adding cavity to state:', cavity);
     // Update local state
-    setCavities(prev => [...prev, cavity]);
+    setCavities(prev => {
+      const newCavities = [...prev, cavity];
+      console.log('New cavities state:', newCavities);
+      return newCavities;
+    });
   };
 
   const handleRemoveCavity = (id: string) => {
@@ -1465,6 +1683,8 @@ export default function JawViewer() {
             chewingMode={chewingMode}
             controlsRef={controlsRef}
             ctScanCavities={ctScanData?.cavity}
+            onShowCavityMenu={setCavityMenuData}
+            jawModelRef={jawModelRef}
           />
         </Center>
 
@@ -1477,6 +1697,15 @@ export default function JawViewer() {
           maxDistance={20}
         />
       </Canvas>
+
+      {/* Cavity Position Menu */}
+      {cavityMenuData && (
+        <CavityPositionMenu
+          menuData={cavityMenuData}
+          onSelect={(position) => handleCavityPositionSelect(cavityMenuData.toothInfo, position)}
+          onClose={() => setCavityMenuData(null)}
+        />
+      )}
 
       {/* Role-based control panel */}
       {currentUser?.role === 'dentist' ? (
