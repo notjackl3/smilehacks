@@ -1,6 +1,6 @@
 # Blender 5.0.1
 # www.blender.org
-mtllib theREALmodel.mtl
+mtllib jaw-blender.mtl
 o jaw
 v -0.572183 12.103913 7.465119
 v -1.354284 12.103913 7.419682
