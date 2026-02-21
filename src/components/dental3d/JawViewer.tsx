@@ -1369,7 +1369,23 @@ export default function JawViewer() {
     // If we have a patient ID and user is a dentist, save to database
     if (currentPatientId && currentUser?.role === 'dentist') {
       try {
-        const { addRemovedTooth } = await import('@/lib/api');
+        const { addRemovedTooth, removeCavity } = await import('@/lib/api');
+
+        // First, remove any cavities on this tooth from the database
+        const cavitiesOnTooth = cavities.filter(c => c.toothName === name);
+        if (cavitiesOnTooth.length > 0) {
+          console.log(`Removing ${cavitiesOnTooth.length} cavities from tooth ${toothNumber}`);
+          // Remove each cavity from database
+          for (const cavity of cavitiesOnTooth) {
+            try {
+              await removeCavity(currentPatientId, toothNumber);
+            } catch (err) {
+              console.error('Failed to remove cavity from database:', err);
+            }
+          }
+        }
+
+        // Then remove the tooth
         console.log('Manually removing tooth:', toothNumber, 'for patient:', currentPatientId);
         await addRemovedTooth(currentPatientId, toothNumber);
         console.log('Tooth removal saved to database');
@@ -1379,7 +1395,7 @@ export default function JawViewer() {
       }
     }
 
-    // Update local state
+    // Update local state - remove tooth and its cavities
     setDeletedParts(prev => {
       const newSet = new Set(prev);
       newSet.add(name);
@@ -1452,6 +1468,86 @@ export default function JawViewer() {
     // Clear voice selections when clicking on empty space
     setVoiceSelectedNames(new Set());
   }, []);
+
+  // Handle restore all teeth
+  const handleRestoreAll = useCallback(async () => {
+    if (!currentPatientId || !currentUser || currentUser.role !== 'dentist') {
+      // If not a dentist or no patient loaded, just clear local state
+      setDeletedParts(new Set());
+      return;
+    }
+
+    try {
+      const { removeRemovedTooth } = await import('@/lib/api');
+
+      // Get all deleted tooth numbers
+      const deletedToothNumbers: number[] = [];
+      deletedParts.forEach(name => {
+        const toothInfo = Object.entries(TOOTH_MAP).find(([key]) => key === name)?.[1];
+        if (toothInfo && !('isGum' in toothInfo)) {
+          deletedToothNumbers.push(toothInfo.toothNumber);
+        }
+      });
+
+      // Remove each tooth from the removed_teeth list in database
+      console.log(`Restoring ${deletedToothNumbers.length} teeth in database`);
+      for (const toothNumber of deletedToothNumbers) {
+        try {
+          await removeRemovedTooth(currentPatientId, toothNumber);
+        } catch (err) {
+          console.error(`Failed to restore tooth ${toothNumber}:`, err);
+        }
+      }
+
+      // Clear local state
+      setDeletedParts(new Set());
+      console.log('All teeth restored');
+    } catch (error) {
+      console.error('Failed to restore teeth:', error);
+    }
+  }, [deletedParts, currentPatientId, currentUser]);
+
+  // Handle clear all cavities
+  const handleClearAllCavities = useCallback(async () => {
+    if (!currentPatientId || !currentUser || currentUser.role !== 'dentist') {
+      // If not a dentist or no patient loaded, just clear local state
+      setCavities([]);
+      return;
+    }
+
+    try {
+      const { removeCavity } = await import('@/lib/api');
+
+      // Get all unique tooth numbers that have cavities
+      const teethWithCavities = new Map<number, number>(); // toothNumber -> count
+      cavities.forEach(cavity => {
+        const toothInfo = Object.entries(TOOTH_MAP).find(([key]) => key === cavity.toothName)?.[1];
+        if (toothInfo && !('isGum' in toothInfo)) {
+          const count = teethWithCavities.get(toothInfo.toothNumber) || 0;
+          teethWithCavities.set(toothInfo.toothNumber, count + 1);
+        }
+      });
+
+      // Remove all cavities from database
+      console.log(`Removing cavities from ${teethWithCavities.size} teeth in database`);
+      for (const [toothNumber, count] of teethWithCavities.entries()) {
+        // Call removeCavity for each cavity on this tooth
+        for (let i = 0; i < count; i++) {
+          try {
+            await removeCavity(currentPatientId, toothNumber);
+          } catch (err) {
+            console.error(`Failed to remove cavity from tooth ${toothNumber}:`, err);
+          }
+        }
+      }
+
+      // Clear local state
+      setCavities([]);
+      console.log('All cavities cleared');
+    } catch (error) {
+      console.error('Failed to clear cavities:', error);
+    }
+  }, [cavities, currentPatientId, currentUser]);
 
   // Load patient dental record from database
   const loadPatientDataFromDB = useCallback(async (patientId?: string) => {
@@ -1612,7 +1708,7 @@ export default function JawViewer() {
               {deletedParts.size} part{deletedParts.size > 1 ? 's' : ''} deleted
             </p>
             <button
-              onClick={() => setDeletedParts(new Set())}
+              onClick={handleRestoreAll}
               className="text-xs text-blue-600 hover:text-blue-700 mt-1"
             >
               Restore all
@@ -1625,7 +1721,7 @@ export default function JawViewer() {
               {cavities.length} cavit{cavities.length > 1 ? 'ies' : 'y'}
             </p>
             <button
-              onClick={() => setCavities([])}
+              onClick={handleClearAllCavities}
               className="text-xs text-blue-600 hover:text-blue-700 mt-1"
             >
               Clear all
