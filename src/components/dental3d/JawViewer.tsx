@@ -115,6 +115,17 @@ function findObjectName(toothType: string, quadrant: string): string | null {
   return null;
 }
 
+// Find object name from tooth number
+function findObjectNameByToothNumber(toothNumber: number): string | null {
+  for (const [objName, info] of Object.entries(TOOTH_MAP)) {
+    if ('isGum' in info) continue;
+    if (info.toothNumber === toothNumber) {
+      return objName;
+    }
+  }
+  return null;
+}
+
 function getToothInfo(objectName: string): { toothNumber?: number; displayName: string; quadrant?: string; isGum?: boolean } {
   const info = TOOTH_MAP[objectName];
 
@@ -197,6 +208,7 @@ interface JawModelProps {
   focusMode: boolean;
   chewingMode: boolean;
   controlsRef: React.RefObject<{ target: THREE.Vector3; update: () => void } | null>;
+  ctScanCavities?: CTScanData['cavity'];
 }
 
 function JawModel({
@@ -212,6 +224,7 @@ function JawModel({
   focusMode,
   chewingMode,
   controlsRef,
+  ctScanCavities = [],
 }: JawModelProps) {
   const [model, setModel] = useState<THREE.Group | null>(null);
   const [cavityPreview, setCavityPreview] = useState<CavityPreviewData | null>(null);
@@ -229,6 +242,7 @@ function JawModel({
   const upperJawMeshes = useRef<THREE.Mesh[]>([]);
   const allChewingMeshes = useRef<THREE.Mesh[]>([]);
   const originalPositionsRef = useRef<Map<number, number>>(new Map());
+  const ctCavitiesGenerated = useRef(false);
 
   const getMeshInfo = useCallback((mesh: THREE.Mesh): PartInfo => {
     const name = meshNames.current.get(mesh.id) || mesh.name || 'unknown';
@@ -761,6 +775,9 @@ function JawModel({
           }
         });
 
+        // Update all transforms before setting the model
+        obj.updateMatrixWorld(true);
+
         setModel(obj);
         console.log("TOTAL meshes:", allMeshes.current.length);
       },
@@ -770,6 +787,151 @@ function JawModel({
       }
     );
   }, []);
+
+  // Generate cavities from CT scan data once model is loaded
+  useEffect(() => {
+    // Only generate once
+    if (!model || ctScanCavities.length === 0 || ctCavitiesGenerated.current) return;
+
+    console.log('Starting cavity generation for', ctScanCavities.length, 'cavities');
+
+    // Ensure model transforms are up to date
+    model.updateMatrixWorld(true);
+
+    // Helper to get direction vector based on cavity position
+    const getDirectionVector = (position: string): THREE.Vector3 => {
+      switch (position) {
+        case 'occlusal': return new THREE.Vector3(0, 1, 0); // Top surface
+        case 'buccal': return new THREE.Vector3(1, 0, 0); // Outer surface (cheek side)
+        case 'lingual': return new THREE.Vector3(-1, 0, 0); // Inner surface (tongue side)
+        case 'mesial': return new THREE.Vector3(0, 0, 1); // Front surface
+        case 'distal': return new THREE.Vector3(0, 0, -1); // Back surface
+        default: return new THREE.Vector3(0, 1, 0);
+      }
+    };
+
+    // Helper to get size based on severity
+    const getSizeFromSeverity = (severity: string): number => {
+      switch (severity) {
+        case 'mild': return 0.025 + Math.random() * 0.01;
+        case 'moderate': return 0.035 + Math.random() * 0.015;
+        case 'severe': return 0.05 + Math.random() * 0.02;
+        default: return 0.03;
+      }
+    };
+
+    const generatedCavities: Cavity[] = [];
+    const raycastHelper = new THREE.Raycaster();
+
+    ctScanCavities.forEach(cavityData => {
+      const objName = findObjectNameByToothNumber(cavityData.toothNumber);
+      if (!objName) {
+        console.warn(`Could not find tooth object for tooth number: ${cavityData.toothNumber}`);
+        return;
+      }
+
+      const mesh = allMeshes.current.find(m => meshNames.current.get(m.id) === objName);
+      if (!mesh || !mesh.geometry) {
+        console.warn(`Could not find mesh for object: ${objName}`);
+        return;
+      }
+
+      // CRITICAL: Update the mesh's world matrix before processing
+      mesh.updateMatrixWorld(true);
+
+      // Get bounding box of the tooth
+      const boundingBox = new THREE.Box3().setFromObject(mesh);
+      const center = boundingBox.getCenter(new THREE.Vector3());
+      const size = boundingBox.getSize(new THREE.Vector3());
+
+      // Get direction based on cavity position
+      const direction = getDirectionVector(cavityData.position).normalize();
+
+      // Try to find a surface point by sampling from the geometry
+      let cavityPosition: THREE.Vector3;
+      let cavityNormal: THREE.Vector3;
+
+      const positionAttribute = mesh.geometry.getAttribute('position');
+      const normalAttribute = mesh.geometry.getAttribute('normal');
+
+      if (positionAttribute && normalAttribute) {
+        // Find vertices that are closest to the desired direction
+        let bestVertex: THREE.Vector3 | null = null;
+        let bestNormal: THREE.Vector3 | null = null;
+        let bestScore = -Infinity;
+
+        const vertex = new THREE.Vector3();
+        const normal = new THREE.Vector3();
+        const worldVertex = new THREE.Vector3();
+        const worldNormal = new THREE.Vector3();
+
+        // Sample vertices to find the best match for the cavity position
+        const sampleCount = Math.min(positionAttribute.count, 100);
+        const step = Math.floor(positionAttribute.count / sampleCount);
+
+        for (let i = 0; i < positionAttribute.count; i += step) {
+          vertex.fromBufferAttribute(positionAttribute, i);
+          normal.fromBufferAttribute(normalAttribute, i);
+
+          // Transform to world space
+          worldVertex.copy(vertex).applyMatrix4(mesh.matrixWorld);
+          worldNormal.copy(normal).transformDirection(mesh.matrixWorld).normalize();
+
+          // Calculate direction from center to this vertex
+          const vertexDir = worldVertex.clone().sub(center).normalize();
+
+          // Score based on how well this vertex matches the desired direction
+          const directionScore = vertexDir.dot(direction);
+          // Also prefer vertices where the normal points outward
+          const normalScore = worldNormal.dot(direction);
+
+          const totalScore = directionScore * 0.7 + normalScore * 0.3;
+
+          if (totalScore > bestScore) {
+            bestScore = totalScore;
+            bestVertex = worldVertex.clone();
+            bestNormal = worldNormal.clone();
+          }
+        }
+
+        if (bestVertex && bestNormal) {
+          cavityPosition = bestVertex;
+          cavityNormal = bestNormal;
+          console.log(`Cavity on tooth ${cavityData.toothNumber} (${cavityData.position}): found surface point with score ${bestScore.toFixed(2)}`);
+        } else {
+          // Ultimate fallback
+          console.warn(`Failed to find surface point for tooth ${cavityData.toothNumber}, using center offset`);
+          cavityPosition = center.clone().add(direction.clone().multiplyScalar(Math.max(size.x, size.y, size.z) * 0.4));
+          cavityNormal = direction;
+        }
+      } else {
+        // Fallback if no geometry attributes
+        console.warn(`No geometry attributes for tooth ${cavityData.toothNumber}`);
+        cavityPosition = center.clone().add(direction.clone().multiplyScalar(Math.max(size.x, size.y, size.z) * 0.4));
+        cavityNormal = direction;
+      }
+
+      // Generate cavity with appropriate size based on severity
+      const cavity: Cavity = {
+        id: `ct_cavity_${cavityData.toothNumber}_${Math.random().toString(36).slice(2, 11)}`,
+        toothName: objName,
+        position: cavityPosition,
+        normal: cavityNormal.normalize(),
+        size: getSizeFromSeverity(cavityData.severity),
+      };
+
+      generatedCavities.push(cavity);
+    });
+
+    // Mark as generated before adding cavities to prevent re-triggering
+    ctCavitiesGenerated.current = true;
+
+    // Add all generated cavities at once
+    generatedCavities.forEach(cavity => onAddCavity(cavity));
+
+    console.log(`Generated ${generatedCavities.length} cavities from CT scan data`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, ctScanCavities]);
 
   if (!model) {
     return (
@@ -903,6 +1065,18 @@ interface VoiceCommandResult {
   rawTranscript?: string;
 }
 
+interface CTScanData {
+  scanId: string;
+  patientId: string;
+  scanDate: string;
+  removed: number[];
+  cavity: {
+    toothNumber: number;
+    severity: 'mild' | 'moderate' | 'severe';
+    position: 'occlusal' | 'buccal' | 'lingual' | 'mesial' | 'distal';
+  }[];
+}
+
 export default function JawViewer() {
   const [hoveredPart, setHoveredPart] = useState<PartInfo | null>(null);
   const [selectedPart, setSelectedPart] = useState<PartInfo | null>(null);
@@ -913,6 +1087,7 @@ export default function JawViewer() {
   const [lastVoiceCommand, setLastVoiceCommand] = useState<string>('');
   const [focusMode, setFocusMode] = useState(false);
   const [chewingMode, setChewingMode] = useState(false);
+  const [ctScanData, setCTScanData] = useState<CTScanData | null>(null);
   const controlsRef = useRef<OrbitControlsImpl>(null!);
 
   const handleVoiceCommand = useCallback((command: VoiceCommandResult) => {
@@ -977,6 +1152,36 @@ export default function JawViewer() {
     setVoiceSelectedNames(new Set());
   }, []);
 
+  // Load CT scan data on mount
+  useEffect(() => {
+    const loadCTScanData = async () => {
+      try {
+        const response = await fetch('/data/mock-ct-scan.json');
+        const data: CTScanData = await response.json();
+        setCTScanData(data);
+
+        // Apply removed teeth
+        const removedTeethNames = new Set<string>();
+        data.removed.forEach(toothNumber => {
+          const objName = findObjectNameByToothNumber(toothNumber);
+          if (objName) {
+            removedTeethNames.add(objName);
+          }
+        });
+        setDeletedParts(removedTeethNames);
+
+        // Clear existing manually added cavities since we're loading from CT scan
+        setCavities([]);
+
+        console.log('CT Scan data loaded:', data);
+      } catch (error) {
+        console.error('Failed to load CT scan data:', error);
+      }
+    };
+
+    loadCTScanData();
+  }, []);
+
   return (
     <div
       className="w-full h-screen bg-gray-100 relative"
@@ -991,6 +1196,15 @@ export default function JawViewer() {
       <div className="absolute top-4 left-4 z-10 bg-white/90 backdrop-blur-sm rounded-lg px-4 py-2 shadow-sm border border-gray-200">
         <h1 className="text-xl font-bold text-gray-800">DentalVision</h1>
         <p className="text-sm text-gray-500">3D Dental Model Viewer</p>
+        {ctScanData && (
+          <div className="mt-2 pt-2 border-t border-gray-200">
+            <p className="text-xs text-green-600 font-medium">📊 CT Scan Loaded</p>
+            <p className="text-xs text-gray-500">Scan ID: {ctScanData.scanId}</p>
+            <p className="text-xs text-gray-500">Date: {ctScanData.scanDate}</p>
+            <p className="text-xs text-gray-500">Removed: {ctScanData.removed.length} teeth</p>
+            <p className="text-xs text-gray-500">Cavities: {ctScanData.cavity.length} detected</p>
+          </div>
+        )}
       </div>
 
       {/* Top center panel for tools */}
@@ -1155,6 +1369,7 @@ export default function JawViewer() {
             focusMode={focusMode}
             chewingMode={chewingMode}
             controlsRef={controlsRef}
+            ctScanCavities={ctScanData?.cavity}
           />
         </Center>
 

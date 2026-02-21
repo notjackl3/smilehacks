@@ -1,0 +1,32 @@
+{
+  "scanId": "CT-2024-001",
+  "patientId": "P-12345",
+  "scanDate": "2024-01-15",
+  "removed": [
+    8,
+    9,
+    15
+  ],
+  "cavity": [
+    {
+      "toothNumber": 3,
+      "severity": "moderate",
+      "position": "occlusal"
+    },
+    {
+      "toothNumber": 14,
+      "severity": "mild",
+      "position": "buccal"
+    },
+    {
+      "toothNumber": 19,
+      "severity": "severe",
+      "position": "occlusal"
+    },
+    {
+      "toothNumber": 25,
+      "severity": "mild",
+      "position": "lingual"
+    }
+  ]
+}
