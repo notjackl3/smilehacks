@@ -18,20 +18,7 @@ export default function Home() {
 
   return (
     <main className="w-full h-screen relative">
-      <JawViewer />
-
-      {lastImage && (
-        <div className="fixed bottom-4 right-4 z-50 w-44 rounded-xl overflow-hidden border border-gray-200 bg-white shadow-lg">
-          <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-100">
-            Last uploaded X-ray
-          </div>
-          <img
-            src={lastImage}
-            alt="Last uploaded X-ray"
-            className="w-full h-auto object-contain"
-          />
-        </div>
-      )}
+      <JawViewer lastImage={lastImage} />
     </main>
   );
 }

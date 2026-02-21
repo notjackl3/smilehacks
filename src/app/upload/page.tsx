@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 export default function UploadPage() {
@@ -11,12 +11,27 @@ export default function UploadPage() {
 
   const router = useRouter();
 
+  // Cleanup object URLs to avoid memory leaks
+  useEffect(() => {
+    return () => {
+      if (imagePreview?.startsWith("blob:")) {
+        URL.revokeObjectURL(imagePreview);
+      }
+    };
+  }, [imagePreview]);
+
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0] ?? null;
     if (!f) return;
 
     setFile(f);
     setErrorMsg(null);
+
+    // Revoke previous preview URL if any
+    setImagePreview(prev => {
+      if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
+      return prev;
+    });
 
     const previewUrl = URL.createObjectURL(f);
     setImagePreview(previewUrl);
@@ -34,10 +49,7 @@ export default function UploadPage() {
         reader.onerror = () => reject(new Error("Failed to read file"));
         reader.onloadend = () => {
           try {
-            localStorage.setItem(
-              "lastUploadedImage",
-              String(reader.result || "")
-            );
+            localStorage.setItem("lastUploadedImage", String(reader.result || ""));
             resolve();
           } catch (err) {
             reject(err);
@@ -98,9 +110,7 @@ export default function UploadPage() {
             </div>
           )}
 
-          {errorMsg && (
-            <p className="text-sm text-red-600">{errorMsg}</p>
-          )}
+          {errorMsg && <p className="text-sm text-red-600">{errorMsg}</p>}
 
           <button
             onClick={handleGenerate}

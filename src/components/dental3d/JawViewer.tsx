@@ -1077,7 +1077,11 @@ interface CTScanData {
   }[];
 }
 
-export default function JawViewer() {
+type JawViewerProps = {
+  lastImage?: string | null;
+};
+
+export default function JawViewer({ lastImage = null }: JawViewerProps = {}) {
   const [hoveredPart, setHoveredPart] = useState<PartInfo | null>(null);
   const [selectedPart, setSelectedPart] = useState<PartInfo | null>(null);
   const [deletedParts, setDeletedParts] = useState<Set<string>>(new Set());
@@ -1089,6 +1093,14 @@ export default function JawViewer() {
   const [chewingMode, setChewingMode] = useState(false);
   const [ctScanData, setCTScanData] = useState<CTScanData | null>(null);
   const controlsRef = useRef<OrbitControlsImpl>(null!);
+
+  // NEW: 2D preview toggle
+  const [show2DPreview, setShow2DPreview] = useState(false);
+
+  // If image disappears, auto-hide the preview
+  useEffect(() => {
+    if (!lastImage) setShow2DPreview(false);
+  }, [lastImage]);
 
   const handleVoiceCommand = useCallback((command: VoiceCommandResult) => {
     setLastVoiceCommand(command.rawTranscript || '');
@@ -1148,7 +1160,6 @@ export default function JawViewer() {
   };
 
   const handleClickEmpty = useCallback(() => {
-    // Clear voice selections when clicking on empty space
     setVoiceSelectedNames(new Set());
   }, []);
 
@@ -1160,7 +1171,6 @@ export default function JawViewer() {
         const data: CTScanData = await response.json();
         setCTScanData(data);
 
-        // Apply removed teeth
         const removedTeethNames = new Set<string>();
         data.removed.forEach(toothNumber => {
           const objName = findObjectNameByToothNumber(toothNumber);
@@ -1170,7 +1180,6 @@ export default function JawViewer() {
         });
         setDeletedParts(removedTeethNames);
 
-        // Clear existing manually added cavities since we're loading from CT scan
         setCavities([]);
 
         console.log('CT Scan data loaded:', data);
@@ -1244,6 +1253,7 @@ export default function JawViewer() {
         >
           <span className="text-lg">{chewingMode ? '⏸️' : '🦷'} Chew</span>
         </button>
+
         <button
           onClick={() => setFocusMode(!focusMode)}
           className={`p-3 rounded-lg font-medium transition-colors flex items-center justify-center ${
@@ -1255,8 +1265,45 @@ export default function JawViewer() {
         >
           <span className="text-lg">Focus Mode</span>
         </button>
+
+        {/* NEW: Show 2D Preview button */}
+        <button
+          onClick={() => setShow2DPreview(v => !v)}
+          disabled={!lastImage}
+          className={`p-3 rounded-lg font-medium transition-colors flex items-center justify-center ${
+            show2DPreview
+              ? 'bg-purple-500 text-white'
+              : 'bg-white text-gray-700 hover:bg-blue-100 border border-gray-200'
+          } ${!lastImage ? 'opacity-50 cursor-not-allowed' : ''}`}
+          title={lastImage ? (show2DPreview ? 'Hide 2D Preview' : 'Show 2D Preview') : 'Upload an image to enable preview'}
+        >
+          <span className="text-lg">Show 2D Preview</span>
+        </button>
+
         <VoiceCommand onCommand={handleVoiceCommand} />
       </div>
+
+      {/* NEW: 2D Preview popup (above the toolbar so it won't cover buttons) */}
+      {show2DPreview && lastImage && (
+        <div className="absolute right-4 bottom-24 z-20 w-64 rounded-xl overflow-hidden border border-gray-200 bg-white shadow-lg">
+          <div className="px-3 py-2 text-xs font-medium text-gray-700 border-b border-gray-100 flex items-center justify-between">
+            <span>2D X-ray Preview</span>
+            <button
+              onClick={() => setShow2DPreview(false)}
+              className="text-gray-500 hover:text-gray-800 text-xs"
+              aria-label="Close 2D preview"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
+          <img
+            src={lastImage}
+            alt="Last uploaded X-ray"
+            className="w-full h-auto object-contain"
+          />
+        </div>
+      )}
 
       {focusMode && !selectedPart && (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-10 bg-blue-50 backdrop-blur-sm rounded-lg px-4 py-2 border border-blue-200 shadow-sm">
@@ -1349,7 +1396,6 @@ export default function JawViewer() {
         gl={{ antialias: true, alpha: true }}
         style={{ background: 'transparent' }}
       >
-
         <ambientLight intensity={0.6} />
         <directionalLight position={[5, 5, 5]} intensity={1} />
         <directionalLight position={[-5, 5, -5]} intensity={0.5} />
