@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
 
 export default function UploadPage() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -30,39 +29,23 @@ export default function UploadPage() {
     setErrorMsg(null);
 
     try {
-      // 1) Get logged-in user (must be a dentist in your MVP)
-      const { data: userData, error: userErr } = await supabase.auth.getUser();
-      if (userErr) throw userErr;
-      const user = userData.user;
-      if (!user) throw new Error("Not logged in.");
+      await new Promise<void>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.onloadend = () => {
+          try {
+            localStorage.setItem(
+              "lastUploadedImage",
+              String(reader.result || "")
+            );
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
+        };
+        reader.readAsDataURL(file);
+      });
 
-      // 2) You must know WHICH patient this upload is for.
-      // MVP placeholder: set this to a real patient UUID (from your UI selection).
-      const patientId = "PASTE_A_PATIENT_UUID_HERE";
-
-      // 3) Upload to storage
-      const ext = file.name.split(".").pop() || "png";
-      const path = `patient/${patientId}/${crypto.randomUUID()}.${ext}`;
-
-      const { error: uploadErr } = await supabase
-        .storage
-        .from("xray-images")
-        .upload(path, file, { contentType: file.type });
-
-      if (uploadErr) throw uploadErr;
-
-      // 4) Insert metadata row
-      const { error: insertErr } = await supabase
-        .from("patient_images")
-        .insert({
-          patient_id: patientId,
-          uploaded_by: user.id,
-          storage_path: path,
-        });
-
-      if (insertErr) throw insertErr;
-
-      // 5) Navigate to viewer page
       router.push("/");
     } catch (err: any) {
       console.error(err);
@@ -89,8 +72,12 @@ export default function UploadPage() {
             htmlFor="fileInput"
             className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-xl p-8 cursor-pointer hover:border-slate-400 transition"
           >
-            <span className="text-sm text-slate-600">Click to upload X-ray image</span>
-            <span className="text-xs text-slate-400 mt-1">PNG, JPG supported</span>
+            <span className="text-sm text-slate-600">
+              Click to upload X-ray image
+            </span>
+            <span className="text-xs text-slate-400 mt-1">
+              PNG, JPG supported
+            </span>
           </label>
 
           <input
@@ -120,7 +107,7 @@ export default function UploadPage() {
             className="w-full bg-slate-900 text-white text-sm py-2.5 rounded-lg hover:bg-slate-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={!file || uploading}
           >
-            {uploading ? "Uploading..." : "Generate 3D Model"}
+            {uploading ? "Processing..." : "Generate 3D Model"}
           </button>
         </div>
       </div>
