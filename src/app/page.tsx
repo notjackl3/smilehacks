@@ -1,9 +1,8 @@
 'use client';
 
-import dynamic from 'next/dynamic';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabaseClient';
+import dynamic from 'next/dynamic';
 
 // Dynamic import to avoid SSR issues with Three.js
 const JawViewer = dynamic(
@@ -13,43 +12,28 @@ const JawViewer = dynamic(
 
 export default function Home() {
   const router = useRouter();
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const checkAuth = async () => {
-      const { data: { user }, error } = await supabase.auth.getUser();
-
-      if (error || !user) {
-        router.replace('/login');
-        return;
-      }
-
+    // Check if user is logged in
+    const userStr = localStorage.getItem('current_user');
+    if (!userStr) {
+      router.replace('/login');
+    } else {
       setIsAuthenticated(true);
-    };
-
-    checkAuth();
-
-    // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT' || !session) {
-        router.replace('/login');
-      }
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
+    }
+    setIsLoading(false);
   }, [router]);
 
-  // Show loading state while checking auth
-  if (isAuthenticated === null) {
+  if (isLoading || !isAuthenticated) {
     return (
-      <div className="w-full h-screen flex items-center justify-center bg-gray-100">
+      <main className="w-full h-screen flex items-center justify-center bg-gray-100">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading...</p>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
         </div>
-      </div>
+      </main>
     );
   }
 

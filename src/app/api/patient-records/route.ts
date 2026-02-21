@@ -23,44 +23,18 @@ interface PatientDentalRecord {
 export async function GET(request: NextRequest) {
   try {
     const supabase = createServerClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const searchParams = request.nextUrl.searchParams;
     const patientId = searchParams.get('patientId');
 
-    // Get user's role
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    if (profileError || !profile) {
-      return NextResponse.json({ error: 'User profile not found' }, { status: 404 });
-    }
-
-    let targetPatientId: string;
-
-    if (profile.role === 'dentist') {
-      // Dentists can query any patient by ID
-      if (!patientId) {
-        return NextResponse.json({ error: 'patientId parameter is required for dentists' }, { status: 400 });
-      }
-      targetPatientId = patientId;
-    } else {
-      // Patients can only view their own records
-      targetPatientId = user.id;
+    if (!patientId) {
+      return NextResponse.json({ error: 'patientId parameter is required' }, { status: 400 });
     }
 
     // Fetch patient dental record
     const { data: record, error } = await supabase
       .from('patient_dental_records')
       .select('*')
-      .eq('patient_id', targetPatientId)
+      .eq('patient_id', patientId)
       .single();
 
     if (error) {
@@ -69,7 +43,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({
           success: true,
           data: {
-            patient_id: targetPatientId,
+            patient_id: patientId,
             removed_teeth: [],
             cavities: [],
           },
@@ -90,31 +64,10 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST - Create or update patient dental record (dentist only)
+// POST - Create or update patient dental record
 export async function POST(request: NextRequest) {
   try {
     const supabase = createServerClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Verify user is a dentist
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    if (profileError || !profile) {
-      return NextResponse.json({ error: 'User profile not found' }, { status: 404 });
-    }
-
-    if (profile.role !== 'dentist') {
-      return NextResponse.json({ error: 'Only dentists can create/update patient records' }, { status: 403 });
-    }
-
     const body: Partial<PatientDentalRecord> = await request.json();
 
     // Validate required fields
@@ -158,9 +111,8 @@ export async function POST(request: NextRequest) {
 
     if (existing) {
       // Update existing record
-      const updates: any = {
-        dentist_id: user.id,
-      };
+      const updates: Partial<PatientDentalRecord> = {};
+      if (body.dentist_id) updates.dentist_id = body.dentist_id;
       if (body.scan_id) updates.scan_id = body.scan_id;
       if (body.scan_date) updates.scan_date = body.scan_date;
       if (body.removed_teeth !== undefined) updates.removed_teeth = body.removed_teeth;
@@ -185,7 +137,7 @@ export async function POST(request: NextRequest) {
         .from('patient_dental_records')
         .insert({
           patient_id: body.patient_id,
-          dentist_id: user.id,
+          dentist_id: body.dentist_id,
           scan_id: body.scan_id,
           scan_date: body.scan_date || new Date().toISOString().split('T')[0],
           removed_teeth: body.removed_teeth || [],
@@ -214,28 +166,11 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// PATCH - Partially update patient dental record (dentist only)
+// PATCH - Partially update patient dental record
 // Useful for adding/removing individual teeth or cavities without overwriting entire arrays
 export async function PATCH(request: NextRequest) {
   try {
     const supabase = createServerClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Verify user is a dentist
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    if (profileError || !profile || profile.role !== 'dentist') {
-      return NextResponse.json({ error: 'Only dentists can update patient records' }, { status: 403 });
-    }
-
     const body: {
       patient_id: string;
       action: 'add_removed_tooth' | 'remove_removed_tooth' | 'add_cavity' | 'remove_cavity';
@@ -258,7 +193,7 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Patient dental record not found' }, { status: 404 });
     }
 
-    let updates: any = {};
+    const updates: Partial<PatientDentalRecord> = {};
 
     switch (body.action) {
       case 'add_removed_tooth':

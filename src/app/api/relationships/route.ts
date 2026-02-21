@@ -9,26 +9,13 @@ interface DentistPatientRelationship {
   created_at?: string;
 }
 
-// GET - Fetch relationships (dentists see their patients, patients see their dentists)
+// GET - Fetch relationships
 export async function GET(request: NextRequest) {
   try {
     const supabase = createServerClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Get user's role
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    if (profileError || !profile) {
-      return NextResponse.json({ error: 'User profile not found' }, { status: 404 });
-    }
+    const searchParams = request.nextUrl.searchParams;
+    const dentistId = searchParams.get('dentistId');
+    const patientId = searchParams.get('patientId');
 
     let query = supabase.from('dentist_patient_relationships').select(`
       *,
@@ -36,12 +23,12 @@ export async function GET(request: NextRequest) {
       patient:patient_id(id, email)
     `);
 
-    if (profile.role === 'dentist') {
-      // Dentists see all their patient relationships
-      query = query.eq('dentist_id', user.id);
-    } else {
-      // Patients see all their dentist relationships
-      query = query.eq('patient_id', user.id);
+    // Optionally filter by dentist or patient
+    if (dentistId) {
+      query = query.eq('dentist_id', dentistId);
+    }
+    if (patientId) {
+      query = query.eq('patient_id', patientId);
     }
 
     // Only show active relationships by default
@@ -68,57 +55,21 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST - Create new dentist-patient relationship (dentist only)
+// POST - Create new dentist-patient relationship
 export async function POST(request: NextRequest) {
   try {
     const supabase = createServerClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    const body: { dentist_id: string; patient_id: string } = await request.json();
 
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Verify user is a dentist
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    if (profileError || !profile) {
-      return NextResponse.json({ error: 'User profile not found' }, { status: 404 });
-    }
-
-    if (profile.role !== 'dentist') {
-      return NextResponse.json({ error: 'Only dentists can create relationships' }, { status: 403 });
-    }
-
-    const body: { patient_id: string } = await request.json();
-
-    if (!body.patient_id) {
-      return NextResponse.json({ error: 'patient_id is required' }, { status: 400 });
-    }
-
-    // Verify patient exists and is actually a patient
-    const { data: patientProfile, error: patientError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', body.patient_id)
-      .single();
-
-    if (patientError || !patientProfile) {
-      return NextResponse.json({ error: 'Patient not found' }, { status: 404 });
-    }
-
-    if (patientProfile.role !== 'patient') {
-      return NextResponse.json({ error: 'Specified user is not a patient' }, { status: 400 });
+    if (!body.dentist_id || !body.patient_id) {
+      return NextResponse.json({ error: 'dentist_id and patient_id are required' }, { status: 400 });
     }
 
     // Check if relationship already exists
     const { data: existing } = await supabase
       .from('dentist_patient_relationships')
       .select('*')
-      .eq('dentist_id', user.id)
+      .eq('dentist_id', body.dentist_id)
       .eq('patient_id', body.patient_id)
       .single();
 
@@ -151,7 +102,7 @@ export async function POST(request: NextRequest) {
     const { data: relationship, error } = await supabase
       .from('dentist_patient_relationships')
       .insert({
-        dentist_id: user.id,
+        dentist_id: body.dentist_id,
         patient_id: body.patient_id,
         is_active: true,
       })
@@ -179,28 +130,10 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const supabase = createServerClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const body: { relationship_id: string; is_active: boolean } = await request.json();
 
     if (!body.relationship_id || body.is_active === undefined) {
       return NextResponse.json({ error: 'relationship_id and is_active are required' }, { status: 400 });
-    }
-
-    // Verify the relationship belongs to this dentist
-    const { data: existing, error: fetchError } = await supabase
-      .from('dentist_patient_relationships')
-      .select('*')
-      .eq('id', body.relationship_id)
-      .eq('dentist_id', user.id)
-      .single();
-
-    if (fetchError || !existing) {
-      return NextResponse.json({ error: 'Relationship not found or unauthorized' }, { status: 404 });
     }
 
     // Update relationship
@@ -228,16 +161,10 @@ export async function PATCH(request: NextRequest) {
   }
 }
 
-// DELETE - Delete relationship (dentist only)
+// DELETE - Delete relationship
 export async function DELETE(request: NextRequest) {
   try {
     const supabase = createServerClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const searchParams = request.nextUrl.searchParams;
     const relationshipId = searchParams.get('id');
 
@@ -245,12 +172,11 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Relationship ID is required' }, { status: 400 });
     }
 
-    // Delete relationship (RLS ensures only dentist's own relationships can be deleted)
+    // Delete relationship
     const { error } = await supabase
       .from('dentist_patient_relationships')
       .delete()
-      .eq('id', relationshipId)
-      .eq('dentist_id', user.id);
+      .eq('id', relationshipId);
 
     if (error) {
       console.error('Error deleting relationship:', error);

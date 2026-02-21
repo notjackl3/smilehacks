@@ -12,47 +12,19 @@ interface Annotation {
   updated_at?: string;
 }
 
-// GET - Fetch annotations (dentist sees all their annotations, patient sees only public ones)
+// GET - Fetch annotations
 export async function GET(request: NextRequest) {
   try {
     const supabase = createServerClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const searchParams = request.nextUrl.searchParams;
     const patientId = searchParams.get('patientId');
     const toothNumber = searchParams.get('toothNumber');
 
-    // Get user's role from profiles table
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    if (profileError || !profile) {
-      return NextResponse.json({ error: 'User profile not found' }, { status: 404 });
-    }
-
     let query = supabase.from('annotations').select('*');
 
-    // Filter based on user role
-    if (profile.role === 'dentist') {
-      // Dentists see all their annotations
-      query = query.eq('dentist_id', user.id);
-
-      // Optionally filter by patient
-      if (patientId) {
-        query = query.eq('patient_id', patientId);
-      }
-    } else {
-      // Patients only see public annotations about them
-      query = query
-        .eq('patient_id', user.id)
-        .eq('is_public', true);
+    // Optionally filter by patient
+    if (patientId) {
+      query = query.eq('patient_id', patientId);
     }
 
     // Optionally filter by tooth number
@@ -81,37 +53,16 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST - Create new annotation (dentist only)
+// POST - Create new annotation
 export async function POST(request: NextRequest) {
   try {
     const supabase = createServerClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Verify user is a dentist
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    if (profileError || !profile) {
-      return NextResponse.json({ error: 'User profile not found' }, { status: 404 });
-    }
-
-    if (profile.role !== 'dentist') {
-      return NextResponse.json({ error: 'Only dentists can create annotations' }, { status: 403 });
-    }
-
     const body: Omit<Annotation, 'id' | 'created_at' | 'updated_at'> = await request.json();
 
     // Validate required fields
-    if (!body.patient_id || !body.tooth_number || !body.annotation_text) {
+    if (!body.patient_id || !body.dentist_id || !body.tooth_number || !body.annotation_text) {
       return NextResponse.json(
-        { error: 'Missing required fields: patient_id, tooth_number, annotation_text' },
+        { error: 'Missing required fields: patient_id, dentist_id, tooth_number, annotation_text' },
         { status: 400 }
       );
     }
@@ -130,7 +81,7 @@ export async function POST(request: NextRequest) {
       .from('annotations')
       .insert({
         patient_id: body.patient_id,
-        dentist_id: user.id,
+        dentist_id: body.dentist_id,
         tooth_number: body.tooth_number,
         annotation_text: body.annotation_text,
         is_public: body.is_public ?? false,
@@ -155,32 +106,14 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// PUT - Update annotation (dentist only, can only update their own)
+// PUT - Update annotation
 export async function PUT(request: NextRequest) {
   try {
     const supabase = createServerClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const body: { id: string; annotation_text?: string; is_public?: boolean } = await request.json();
 
     if (!body.id) {
       return NextResponse.json({ error: 'Annotation ID is required' }, { status: 400 });
-    }
-
-    // Verify the annotation belongs to this dentist
-    const { data: existingAnnotation, error: fetchError } = await supabase
-      .from('annotations')
-      .select('*')
-      .eq('id', body.id)
-      .eq('dentist_id', user.id)
-      .single();
-
-    if (fetchError || !existingAnnotation) {
-      return NextResponse.json({ error: 'Annotation not found or unauthorized' }, { status: 404 });
     }
 
     // Build update object
@@ -217,16 +150,10 @@ export async function PUT(request: NextRequest) {
   }
 }
 
-// DELETE - Delete annotation (dentist only, can only delete their own)
+// DELETE - Delete annotation
 export async function DELETE(request: NextRequest) {
   try {
     const supabase = createServerClient(request);
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const searchParams = request.nextUrl.searchParams;
     const annotationId = searchParams.get('id');
 
@@ -234,12 +161,11 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Annotation ID is required' }, { status: 400 });
     }
 
-    // Delete annotation (RLS policy ensures only dentist's own annotations can be deleted)
+    // Delete annotation
     const { error } = await supabase
       .from('annotations')
       .delete()
-      .eq('id', annotationId)
-      .eq('dentist_id', user.id);
+      .eq('id', annotationId);
 
     if (error) {
       console.error('Error deleting annotation:', error);

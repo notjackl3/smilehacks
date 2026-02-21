@@ -7,9 +7,8 @@ import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import VoiceCommand from './VoiceCommand';
-import PatientInfoPanel from './PatientInfoPanel';
 import DentistControlPanel from './DentistControlPanel';
-import { supabase } from '@/lib/supabaseClient';
+import PatientControlPanel from './PatientControlPanel';
 import { getPatientRecord, type PatientDentalRecord } from '@/lib/api';
 
 interface PartInfo {
@@ -1094,10 +1093,23 @@ export default function JawViewer() {
   const [ctScanData, setCTScanData] = useState<CTScanData | null>(null);
   const controlsRef = useRef<OrbitControlsImpl>(null!);
 
-  // Authentication and role state
-  const [userRole, setUserRole] = useState<'dentist' | 'patient' | null>(null);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [currentPatientId, setCurrentPatientId] = useState<string | null>(null);
+
+  // Get current user from localStorage
+  const [currentUser, setCurrentUser] = useState<{ id: string; username: string; role: 'dentist' | 'patient'; name: string } | null>(null);
+
+  useEffect(() => {
+    const userStr = localStorage.getItem('current_user');
+    if (userStr) {
+      try {
+        const user = JSON.parse(userStr);
+        setCurrentUser(user);
+      } catch (error) {
+        console.error('Failed to parse current user:', error);
+      }
+    }
+  }, []);
 
   const handleVoiceCommand = useCallback((command: VoiceCommandResult) => {
     setLastVoiceCommand(command.rawTranscript || '');
@@ -1134,7 +1146,37 @@ export default function JawViewer() {
     }
   }, []);
 
-  const handleDelete = (name: string) => {
+  const handleDelete = async (name: string) => {
+    // Get tooth number from the part name
+    const toothInfo = Object.entries(TOOTH_MAP).find(([key]) => key === name)?.[1];
+    if (!toothInfo || 'isGum' in toothInfo) {
+      // Can't delete gums, only update local state
+      setDeletedParts(prev => {
+        const newSet = new Set(prev);
+        newSet.add(name);
+        return newSet;
+      });
+      setCavities(prev => prev.filter(c => c.toothName !== name));
+      setSelectedPart(null);
+      return;
+    }
+
+    const toothNumber = toothInfo.toothNumber;
+
+    // If we have a patient ID and user is a dentist, save to database
+    if (currentPatientId && currentUser?.role === 'dentist') {
+      try {
+        const { addRemovedTooth } = await import('@/lib/api');
+        console.log('Manually removing tooth:', toothNumber, 'for patient:', currentPatientId);
+        await addRemovedTooth(currentPatientId, toothNumber);
+        console.log('Tooth removal saved to database');
+      } catch (error) {
+        console.error('Failed to save tooth removal to database:', error);
+        // Continue with local state update even if API fails
+      }
+    }
+
+    // Update local state
     setDeletedParts(prev => {
       const newSet = new Set(prev);
       newSet.add(name);
@@ -1148,7 +1190,39 @@ export default function JawViewer() {
     setSelectedPart(null);
   };
 
-  const handleAddCavity = (cavity: Cavity) => {
+  const handleAddCavity = async (cavity: Cavity) => {
+    // Get tooth number from the cavity
+    const toothInfo = Object.entries(TOOTH_MAP).find(([key]) => key === cavity.toothName)?.[1];
+    if (!toothInfo || 'isGum' in toothInfo) {
+      // Can't add cavity to gums, only update local state
+      setCavities(prev => [...prev, cavity]);
+      return;
+    }
+
+    const toothNumber = toothInfo.toothNumber;
+
+    // If we have a patient ID and user is a dentist, save to database
+    if (currentPatientId && currentUser?.role === 'dentist') {
+      try {
+        const { addCavity: addCavityAPI } = await import('@/lib/api');
+
+        // Determine severity and position (we'll use defaults since manual clicks don't specify these)
+        const cavityData = {
+          toothNumber,
+          severity: 'moderate' as const,
+          position: 'occlusal' as const,
+        };
+
+        console.log('Manually adding cavity:', cavityData, 'for patient:', currentPatientId);
+        await addCavityAPI(currentPatientId, cavityData);
+        console.log('Cavity saved to database');
+      } catch (error) {
+        console.error('Failed to save cavity to database:', error);
+        // Continue with local state update even if API fails
+      }
+    }
+
+    // Update local state
     setCavities(prev => [...prev, cavity]);
   };
 
@@ -1198,49 +1272,9 @@ export default function JawViewer() {
 
   // Handle patient load from dentist panel
   const handlePatientLoad = useCallback((record: PatientDentalRecord) => {
+    console.log('Patient loaded, setting current patient ID:', record.patient_id);
+    setCurrentPatientId(record.patient_id);
     loadPatientDataFromDB(record.patient_id);
-  }, [loadPatientDataFromDB]);
-
-  // Get user authentication and role on mount
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-        if (authError || !user) {
-          console.error('Not authenticated:', authError);
-          setIsLoading(false);
-          return;
-        }
-
-        // Get user's role from profiles table
-        const { data: profile, error: profileError } = await supabase
-          .from('profiles')
-          .select('role')
-          .eq('id', user.id)
-          .single();
-
-        if (profileError || !profile) {
-          console.error('Failed to get user profile:', profileError);
-          setIsLoading(false);
-          return;
-        }
-
-        setUserRole(profile.role as 'dentist' | 'patient');
-
-        // If patient, automatically load their data
-        if (profile.role === 'patient') {
-          loadPatientDataFromDB();
-        }
-
-        setIsLoading(false);
-      } catch (error) {
-        console.error('Auth check failed:', error);
-        setIsLoading(false);
-      }
-    };
-
-    checkAuth();
   }, [loadPatientDataFromDB]);
 
   return (
@@ -1444,19 +1478,22 @@ export default function JawViewer() {
         />
       </Canvas>
 
-      {/* Render appropriate panel based on user role */}
-      {!isLoading && userRole === 'patient' && (
-        <PatientInfoPanel isOpen={isPanelOpen} onToggle={() => setIsPanelOpen(!isPanelOpen)} />
-      )}
-
-      {!isLoading && userRole === 'dentist' && (
+      {/* Role-based control panel */}
+      {currentUser?.role === 'dentist' ? (
         <DentistControlPanel
           isOpen={isPanelOpen}
           onToggle={() => setIsPanelOpen(!isPanelOpen)}
           onPatientLoad={handlePatientLoad}
           selectedTooth={selectedPart?.toothNumber ?? null}
         />
-      )}
+      ) : currentUser?.role === 'patient' ? (
+        <PatientControlPanel
+          isOpen={isPanelOpen}
+          onToggle={() => setIsPanelOpen(!isPanelOpen)}
+          patientId={currentUser.id}
+          onPatientLoad={handlePatientLoad}
+        />
+      ) : null}
     </div>
   );
 }

@@ -7,18 +7,9 @@
 // ============================================
 
 async function getAuthHeaders(): Promise<HeadersInit> {
-  const { supabase } = await import('./supabaseClient');
-  const { data: { session } } = await supabase.auth.getSession();
-
-  const headers: HeadersInit = {
+  return {
     'Content-Type': 'application/json',
   };
-
-  if (session?.access_token) {
-    headers['Authorization'] = `Bearer ${session.access_token}`;
-  }
-
-  return headers;
 }
 
 // ============================================
@@ -87,14 +78,30 @@ export async function createAnnotation(
   patientId: string,
   toothNumber: number,
   annotationText: string,
-  isPublic: boolean = false
+  isPublic: boolean = false,
+  dentistId?: string
 ): Promise<Annotation> {
+  // Get dentist ID from localStorage if not provided
+  let finalDentistId = dentistId;
+  if (!finalDentistId) {
+    const userStr = localStorage.getItem('current_user');
+    if (userStr) {
+      const user = JSON.parse(userStr);
+      finalDentistId = user.id;
+    }
+  }
+
+  if (!finalDentistId) {
+    throw new Error('Dentist ID is required to create annotation');
+  }
+
   const headers = await getAuthHeaders();
   const response = await fetch('/api/annotations', {
     method: 'POST',
     headers,
     body: JSON.stringify({
       patient_id: patientId,
+      dentist_id: finalDentistId,
       tooth_number: toothNumber,
       annotation_text: annotationText,
       is_public: isPublic,

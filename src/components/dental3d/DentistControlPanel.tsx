@@ -1,8 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabaseClient';
 import {
   getPatientRecord,
   getAnnotations,
@@ -37,6 +36,7 @@ export default function DentistControlPanel({
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>('');
+  const [success, setSuccess] = useState<string>('');
   const [signingOut, setSigningOut] = useState(false);
 
   // Annotation form state
@@ -57,14 +57,32 @@ export default function DentistControlPanel({
     setError('');
 
     try {
-      const [recordData, annotationsData] = await Promise.all([
-        getPatientRecord(patientId),
-        getAnnotations(patientId),
-      ]);
+      // First, try to get the patient record
+      console.log('Loading patient data for ID:', patientId);
+      let recordData = await getPatientRecord(patientId);
+      console.log('Received patient record:', recordData);
+
+      // If the record doesn't have an ID, it means it doesn't exist in the database yet
+      // Create it so we can add cavities/removed teeth later
+      if (!recordData.id) {
+        console.log('Patient record does not exist, creating new record...');
+        const { savePatientRecord } = await import('@/lib/api');
+        recordData = await savePatientRecord(patientId, {
+          removed_teeth: [],
+          cavities: [],
+          scan_date: new Date().toISOString().split('T')[0],
+        });
+        console.log('Created new patient record:', recordData);
+      }
+
+      const annotationsData = await getAnnotations(patientId);
+      console.log('Loaded annotations:', annotationsData);
 
       setCurrentPatient(recordData);
       setAnnotations(annotationsData);
       onPatientLoad(recordData);
+      setSuccess('Patient data loaded successfully');
+      setTimeout(() => setSuccess(''), 2000);
     } catch (err) {
       console.error('Error loading patient data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load patient data');
@@ -123,14 +141,8 @@ export default function DentistControlPanel({
   const handleSignOut = async () => {
     setSigningOut(true);
     try {
-      const { error } = await supabase.auth.signOut();
-      if (error) {
-        console.error('Sign out error:', error);
-        alert('Failed to sign out. Please try again.');
-        setSigningOut(false);
-      } else {
-        router.replace('/login');
-      }
+      localStorage.removeItem('current_user');
+      router.replace('/login');
     } catch (err) {
       console.error('Sign out error:', err);
       alert('Failed to sign out. Please try again.');
@@ -142,11 +154,18 @@ export default function DentistControlPanel({
     if (!currentPatient) return;
 
     try {
+      console.log('Removing tooth:', toothNumber, 'for patient:', currentPatient.patient_id);
       const updated = await addRemovedTooth(currentPatient.patient_id, toothNumber);
+      console.log('Updated record after removing tooth:', updated);
       setCurrentPatient(updated);
       onPatientLoad(updated);
+      setSuccess(`Tooth #${toothNumber} marked as removed`);
+      setError('');
+      setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
+      console.error('Error removing tooth:', err);
       setError(err instanceof Error ? err.message : 'Failed to mark tooth as removed');
+      setSuccess('');
     }
   };
 
@@ -154,11 +173,18 @@ export default function DentistControlPanel({
     if (!currentPatient) return;
 
     try {
+      console.log('Restoring tooth:', toothNumber, 'for patient:', currentPatient.patient_id);
       const updated = await removeRemovedTooth(currentPatient.patient_id, toothNumber);
+      console.log('Updated record after restoring tooth:', updated);
       setCurrentPatient(updated);
       onPatientLoad(updated);
+      setSuccess(`Tooth #${toothNumber} restored`);
+      setError('');
+      setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
+      console.error('Error restoring tooth:', err);
       setError(err instanceof Error ? err.message : 'Failed to restore tooth');
+      setSuccess('');
     }
   };
 
@@ -175,12 +201,18 @@ export default function DentistControlPanel({
         position: cavityPosition,
       };
 
+      console.log('Adding cavity:', cavity, 'for patient:', currentPatient.patient_id);
       const updated = await addCavity(currentPatient.patient_id, cavity);
+      console.log('Updated record after adding cavity:', updated);
       setCurrentPatient(updated);
       onPatientLoad(updated);
+      setSuccess(`Cavity added to tooth #${selectedTooth} (${cavitySeverity})`);
       setError('');
+      setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
+      console.error('Error adding cavity:', err);
       setError(err instanceof Error ? err.message : 'Failed to add cavity');
+      setSuccess('');
     }
   };
 
@@ -188,11 +220,18 @@ export default function DentistControlPanel({
     if (!currentPatient) return;
 
     try {
+      console.log('Removing cavity from tooth:', toothNumber, 'for patient:', currentPatient.patient_id);
       const updated = await removeCavity(currentPatient.patient_id, toothNumber);
+      console.log('Updated record after removing cavity:', updated);
       setCurrentPatient(updated);
       onPatientLoad(updated);
+      setSuccess(`Cavity removed from tooth #${toothNumber}`);
+      setError('');
+      setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
+      console.error('Error removing cavity:', err);
       setError(err instanceof Error ? err.message : 'Failed to remove cavity');
+      setSuccess('');
     }
   };
 
@@ -251,6 +290,12 @@ export default function DentistControlPanel({
             {error && (
               <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
                 {error}
+              </div>
+            )}
+
+            {success && (
+              <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg text-sm">
+                ✓ {success}
               </div>
             )}
 

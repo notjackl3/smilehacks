@@ -27,7 +27,7 @@ export function SignupForm(props: React.ComponentProps<typeof Card>) {
     setError(null)
 
     const formData = new FormData(e.currentTarget)
-    const email = formData.get("email") as string
+    const username = formData.get("username") as string
     const password = formData.get("password") as string
     const confirmPassword = formData.get("confirm-password") as string
     const name = formData.get("name") as string
@@ -44,97 +44,63 @@ export function SignupForm(props: React.ComponentProps<typeof Card>) {
       return
     }
 
-    const { data, error: signUpError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          full_name: name,
-          role: role,
-        },
-      },
-    })
-
-    if (signUpError) {
-      setError(signUpError.message)
+    if (username.length < 3) {
+      setError("Username must be at least 3 characters")
       setLoading(false)
       return
     }
 
-    if (data.user) {
-      // Create profile entry (only id and role - email is in auth.users)
-      const { error: profileError } = await supabase
+    try {
+      // Check if username already exists
+      const { data: existingUser, error: checkError } = await supabase
+        .from("profiles")
+        .select("username")
+        .eq("username", username)
+        .single()
+
+      if (existingUser) {
+        setError("Username already taken")
+        setLoading(false)
+        return
+      }
+
+      // Generate a UUID for the new profile
+      const userId = crypto.randomUUID()
+
+      // Create profile entry directly
+      const { data: newProfile, error: profileError } = await supabase
         .from("profiles")
         .insert({
-          id: data.user.id,
+          id: userId,
+          username: username,
+          full_name: name,
+          password: password, // Note: In production, hash this!
           role: role,
         })
+        .select()
+        .single()
 
       if (profileError) {
         console.error("Profile creation error:", profileError.message)
-      }
-
-      // If we have a session, user is logged in
-      if (data.session) {
-        router.push("/")
-        return
-      }
-
-      // No session - try to sign in with the password to bypass email verification
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      })
-
-      if (signInError || !signInData.session) {
-        // Email verification is required but emails aren't working
-        // Sign in manually with the credentials
-        console.log("Account created but requires verification. Attempting auto-login...")
-
-        // Try one more time after a short delay
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        const { data: retryData } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        })
-
-        if (retryData?.session) {
-          router.push("/")
-          return
-        }
-
-        // If still no session, the account was created but they can't log in yet
-        setError("Account created! You can now log in with your credentials.")
+        setError(profileError.message)
         setLoading(false)
-
-        // Redirect to login page after 2 seconds
-        setTimeout(() => {
-          router.push("/login")
-        }, 2000)
         return
       }
 
-      // Successfully signed in
+      // Store user info in localStorage for session
+      localStorage.setItem("current_user", JSON.stringify({
+        id: newProfile.id,
+        username: username,
+        role: role,
+        name: name
+      }))
+
+      // Successfully created account
       router.push("/")
-    } else {
-      setError("Signup failed. Please try again.")
+    } catch (err: any) {
+      setError(err.message || "Signup failed. Please try again.")
       setLoading(false)
     }
-  }
-
-  async function onGoogleSignup() {
-    // ✅ persist selected role across OAuth redirect
-    console.log("Storing role in localStorage:", role)
-    localStorage.setItem("pending_role", role)
-
-    const redirectTo = `${window.location.origin}/auth/callback`
-
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo },
-    })
-
-    if (error) console.error("Google sign-in error:", error.message)
   }
 
   return (
@@ -207,19 +173,19 @@ export function SignupForm(props: React.ComponentProps<typeof Card>) {
               />
             </Field>
 
-            {/* Email */}
+            {/* Username */}
             <Field>
-              <FieldLabel htmlFor="email" className="text-gray-700">Email</FieldLabel>
+              <FieldLabel htmlFor="username" className="text-gray-700">Username</FieldLabel>
               <Input
-                id="email"
-                name="email"
-                type="email"
-                placeholder="m@example.com"
+                id="username"
+                name="username"
+                type="text"
+                placeholder="johndoe"
                 required
                 className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-400"
               />
               <FieldDescription className="text-gray-500">
-                We&apos;ll use this to contact you. We won&apos;t share it.
+                Choose a unique username. At least 3 characters.
               </FieldDescription>
             </Field>
 
@@ -268,15 +234,6 @@ export function SignupForm(props: React.ComponentProps<typeof Card>) {
               className="w-full bg-blue-500 hover:bg-blue-600 text-white"
             >
               {loading ? "Creating account..." : "Create account"}
-            </Button>
-
-            <Button
-              variant="outline"
-              type="button"
-              className="w-full border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-              onClick={onGoogleSignup}
-            >
-              Sign up with Google
             </Button>
 
             <p className="text-sm text-gray-600 text-center">
